@@ -1,8 +1,10 @@
 # Quads
 
-A browser version of the tile matching board game **Quads** (Kris Burm / Gigamic), built for two
-players sharing one screen. Touch first, no install, no server: the whole game runs client side and
-is hosted on GitHub Pages.
+A browser version of the tile matching board game **Quads** (Kris Burm / Gigamic). Two players can
+share one screen, or play from separate devices using a shared game code. Touch first: no install, no
+accounts and no server, since the whole game runs client side and is hosted on GitHub Pages.
+
+**Play it here: https://englishw.github.io/quads/**
 
 ## Play
 
@@ -90,16 +92,37 @@ and must have at least one of each. Up to rotation that gives exactly 17 pieces 
 two fully striped symmetric pieces (`PPPP`, the concentric squares, and `XXXX`, the pinwheel) as the
 neutral pieces. 17 + 17 + 2 = 36.
 
-Open `?gallery` (for example `https://<user>.github.io/quads/?gallery`) to see every generated piece
-with its side code, which is handy for comparing against the physical set. `?demo=N` opens a position
-after N automatic legal moves, which is useful for checking the board rendering.
+Open [the piece gallery](https://englishw.github.io/quads/?gallery) to see every generated piece with
+its side code, which is handy for comparing against the physical set.
+
+## URL parameters
+
+- `?game=CODE` joins the shared game with that code. This is what the share link uses, and the app
+  keeps it in the address bar while a shared game is running.
+- `?seat=light` or `?seat=dark` claims a colour explicitly, which settles the case where both players
+  opened the same link.
+- `?gallery` shows every piece in the set with its side code instead of the game.
+- `?demo=N` opens a fresh position after N automatic legal moves, for checking the board rendering.
+- `?view=tabletop` or `?view=upright` presets the one-screen layout.
+
+## Limitations
+
+- Two-screen play relies on public WebRTC signaling relays. It works from any static host, but a
+  restrictive network or a symmetric NAT can stop two browsers from pairing, and there is no TURN
+  server to fall back on. One-screen play never touches the network.
+- Both pages must stay open during a shared game. There is no server holding the position, so moves
+  only travel while the two browsers are connected. The position itself is saved on each device, so
+  reopening the link resumes the game.
+- A hidden tray is a convenience, not hidden information; see the note above.
+- Variation 1 (pieces stood on edge) and Variation 2 (matching the board's own border) from the
+  rulebook are not implemented, and there is no AI opponent or move clock.
 
 ## Development
 
 ```bash
 npm install
 npm run dev        # local dev server
-npm test           # engine unit tests and random self-play fuzz test
+npm test           # engine, snapshot and session tests, plus a self-play fuzz test
 npm run typecheck  # TypeScript, no emit
 npm run build      # production build into dist/
 ```
@@ -117,6 +140,14 @@ A saved game is stored as its options plus the move list, and restoring replays 
 the engine. That reproduces every intermediate position for undo, and means a corrupt or edited save
 fails validation and is discarded instead of loading an illegal board. The same snapshot is what the
 two screens exchange: whichever side is further ahead wins, so a reconnect resynchronises by itself.
+
+Two dependency notes:
+
+- `trystero` is a runtime dependency but is only ever reached through a dynamic import, so it lands in
+  a separate chunk that a one-screen game never downloads.
+- `package.json` overrides `rollup` with `@rollup/wasm-node`. Rollup's native binary fails to load on
+  some machines (it was failing on Windows ARM64 during development); the WebAssembly build is a
+  little slower but works everywhere, including CI.
 
 ## Deployment
 
