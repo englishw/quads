@@ -65,8 +65,10 @@ body {
   box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.25);
 }
 
-/* The second player sits on the far side of the screen. */
-.panel--dark {
+/* Tabletop view only: the second player sits on the far side of a flat screen, so
+   their tray and controls are rotated to face them. Upright view leaves everything
+   the same way up and the players simply take turns. */
+.table[data-view='tabletop'] .panel--dark {
   transform: rotate(180deg);
 }
 
@@ -110,6 +112,26 @@ body {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.segment {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.segment .btn {
+  min-height: 44px;
+  padding: 6px 12px;
+  text-align: left;
+  font-weight: 500;
+}
+
+.btn.is-on {
+  background: #3f6b4a;
+  border-color: rgba(255, 209, 102, 0.6);
+  font-weight: 700;
 }
 
 .tray {

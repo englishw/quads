@@ -15,5 +15,9 @@ if (params.has('gallery')) {
   mountGallery(root);
 } else {
   const demo = Number(params.get('demo') ?? 0);
-  mountGame(root, dragLayer, { demoMoves: Number.isFinite(demo) ? demo : 0 });
+  const requested = params.get('view');
+  mountGame(root, dragLayer, {
+    demoMoves: Number.isFinite(demo) ? demo : 0,
+    view: requested === 'upright' || requested === 'tabletop' ? requested : undefined,
+  });
 }

@@ -15,6 +15,14 @@ import { tileById } from '../engine/tiles';
 import { boardSvg, type Ghost } from '../render/board';
 import { tileSvg } from '../render/tile';
 
+/**
+ * 'tabletop' suits a device lying flat between the players: Dark's tray is rotated
+ * 180 degrees so it reads from the far side. 'upright' suits a monitor or a propped
+ * up tablet, where both players look at the screen the same way up and simply take
+ * turns, so nothing is ever drawn upside down.
+ */
+type ViewMode = 'tabletop' | 'upright';
+
 interface UiState {
   selected: string | null;
   pending: number | null;
@@ -22,14 +30,34 @@ interface UiState {
   hints: boolean;
   message: string;
   showRules: boolean;
+  view: ViewMode;
 }
 
 const PLAYER_NAMES: Record<Player, string> = { light: 'Light', dark: 'Dark' };
+const VIEW_NAMES: Record<ViewMode, string> = { tabletop: 'Tabletop', upright: 'Upright' };
+const VIEW_STORAGE_KEY = 'quads.view';
+
+function loadViewMode(): ViewMode {
+  try {
+    return localStorage.getItem(VIEW_STORAGE_KEY) === 'upright' ? 'upright' : 'tabletop';
+  } catch {
+    // Private browsing modes can throw on storage access; the default is fine.
+    return 'tabletop';
+  }
+}
+
+function saveViewMode(view: ViewMode): void {
+  try {
+    localStorage.setItem(VIEW_STORAGE_KEY, view);
+  } catch {
+    // Not being able to remember the choice is not worth interrupting the game.
+  }
+}
 
 export function mountGame(
   root: HTMLElement,
   dragLayer: HTMLElement,
-  options: { demoMoves?: number } = {},
+  options: { demoMoves?: number; view?: ViewMode } = {},
 ): void {
   let history: GameState[] = [createGame({ seed: Date.now() % 100000 })];
 
@@ -47,7 +75,9 @@ export function mountGame(
     hints: true,
     message: 'Light opens by placing a neutral piece anywhere on the board.',
     showRules: false,
+    view: options.view ?? loadViewMode(),
   };
+  if (options.view) saveViewMode(options.view);
 
   const state = () => history[history.length - 1];
 
@@ -207,6 +237,20 @@ export function mountGame(
     render();
   }
 
+  function setViewMode(view: ViewMode): void {
+    ui.view = view;
+    saveViewMode(view);
+    ui.message =
+      view === 'tabletop'
+        ? 'Tabletop view: Dark reads from the far side of the screen.'
+        : 'Upright view: both players read the screen the same way up.';
+    render();
+  }
+
+  function toggleViewMode(): void {
+    setViewMode(ui.view === 'tabletop' ? 'upright' : 'tabletop');
+  }
+
   function toggleDiagonalRule(): void {
     const current = state();
     if (current.history.length > 0) {
@@ -273,6 +317,11 @@ export function mountGame(
           <li>You may touch your opponent's pieces and several pieces at once.</li>
           <li>If the player to move has no legal placement, the other player wins.</li>
         </ul>
+        <h2>View</h2>
+        <div class="segment" role="group" aria-label="View mode">
+          <button type="button" class="btn${ui.view === 'tabletop' ? ' is-on' : ''}" data-action="view-tabletop" aria-pressed="${ui.view === 'tabletop'}">Tabletop &mdash; device lies flat, Dark's tray is upside down</button>
+          <button type="button" class="btn${ui.view === 'upright' ? ' is-on' : ''}" data-action="view-upright" aria-pressed="${ui.view === 'upright'}">Upright &mdash; screen stands up, both players take turns the same way up</button>
+        </div>
         <h2>Settings</h2>
         <label class="check">
           <input type="checkbox" data-action="diagonal" ${s.options.blockDiagonalOpening ? 'checked' : ''}/>
@@ -286,9 +335,11 @@ export function mountGame(
     const s = state();
     if (s.phase !== 'finished' || !s.winner) return '';
     const text = `${PLAYER_NAMES[s.winner]} wins — ${PLAYER_NAMES[s.turn]} has no legal move.`;
+    // In tabletop view the result is repeated upside down so both sides can read it.
+    const flipped = ui.view === 'tabletop' ? `<p class="result__text result__text--flipped">${text}</p>` : '';
     return `
       <div class="result" role="alert">
-        <p class="result__text result__text--flipped">${text}</p>
+        ${flipped}
         <p class="result__text">${text}</p>
         <button type="button" class="btn btn--primary" data-action="new">New game</button>
       </div>`;
@@ -298,7 +349,7 @@ export function mountGame(
     const s = state();
     const view = { legalCells: legalCells(), ghost: ghost(), lastMoveIndex: s.history.length > 0 ? s.history[s.history.length - 1].index : null };
     root.innerHTML = `
-      <div class="table" data-turn="${s.turn}" data-phase="${s.phase}">
+      <div class="table" data-turn="${s.turn}" data-phase="${s.phase}" data-view="${ui.view}">
         ${panelMarkup('dark')}
         <div class="board-area">
           <div class="board-wrap">${boardSvg(s, view)}</div>
@@ -307,6 +358,7 @@ export function mountGame(
             <button type="button" class="btn" data-action="undo"${history.length > 1 ? '' : ' disabled'}>Undo</button>
             <button type="button" class="btn" data-action="new">New game</button>
             <button type="button" class="btn" data-action="hints" aria-pressed="${ui.hints}">Hints ${ui.hints ? 'on' : 'off'}</button>
+            <button type="button" class="btn" data-action="view" title="Switch between a flat tabletop layout and an upright screen layout">View: ${VIEW_NAMES[ui.view]}</button>
             <button type="button" class="btn" data-action="rules">Rules</button>
             <span class="counter">${placedCount(s)} / 36 placed</span>
           </div>
@@ -440,6 +492,15 @@ export function mountGame(
           ui.showRules = !ui.showRules;
           render();
           return;
+        case 'view':
+          toggleViewMode();
+          return;
+        case 'view-tabletop':
+          setViewMode('tabletop');
+          return;
+        case 'view-upright':
+          setViewMode('upright');
+          return;
         case 'diagonal':
           toggleDiagonalRule();
           return;
@@ -476,6 +537,8 @@ export function mountGame(
     } else if (key === 'h') {
       ui.hints = !ui.hints;
       render();
+    } else if (key === 'v') {
+      toggleViewMode();
     } else if (key.startsWith('arrow')) {
       event.preventDefault();
       const cells = ui.selected ? legalCellsForTile(state(), ui.selected) : new Set<number>();

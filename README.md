@@ -6,8 +6,13 @@ is hosted on GitHub Pages.
 
 ## Play
 
-Open the deployed page, hand the tablet to a friend and sit on opposite sides. The Dark tray sits at
-the top of the screen upside down so it reads correctly from the far side of the table.
+The game has two view modes, switched with the **View** button in the toolbar (or the `V` key), and
+your choice is remembered:
+
+- **Tabletop** — for a phone or tablet lying flat between the two players. Dark's tray and controls sit
+  at the top of the screen rotated 180 degrees so they read correctly from the far side of the table.
+- **Upright** — for a monitor or a propped up tablet. Nothing is drawn upside down; both players look
+  at the screen the same way up and simply take turns using their own controls.
 
 ## Rules
 
@@ -32,7 +37,7 @@ An optional setting also forbids the second neutral piece from touching the firs
   You can also drag a piece straight from your tray onto the board.
 - **Rotate**: the Rotate button in your own panel, or the `R` key.
 - **Place / clear**: the Place and Clear buttons, or `Enter` and `Escape`.
-- **Undo, New game, Hints**: the toolbar under the board, or `U` and `H`.
+- **Undo, New game, Hints, View**: the toolbar under the board, or `U`, `H` and `V`.
 - **Keyboard aiming**: arrow keys move the aim square once a piece is selected.
 
 Green dots mark every legal cell for the selected piece. A green outline means the aimed placement is
