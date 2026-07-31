@@ -1,0 +1,24 @@
+{
+  "name": "quads",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Browser-playable, touch-friendly two-player hotseat version of the board game Quads",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@rollup/wasm-node": "^4.52.5",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9",
+    "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "rollup": "npm:@rollup/wasm-node@^4.52.5"
+  }
+}
