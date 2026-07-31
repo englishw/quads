@@ -3,3 +3,9 @@ dist/
 .vite/
 *.local
 .DS_Store
+
+# Local verification artifacts
+shot-*.png
+p2p-*.png
+.preview-pid.txt
+.p2p-*/

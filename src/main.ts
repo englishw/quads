@@ -16,8 +16,11 @@ if (params.has('gallery')) {
 } else {
   const demo = Number(params.get('demo') ?? 0);
   const requested = params.get('view');
+  const seat = params.get('seat');
   mountGame(root, dragLayer, {
     demoMoves: Number.isFinite(demo) ? demo : 0,
     view: requested === 'upright' || requested === 'tabletop' ? requested : undefined,
+    gameId: params.get('game') ?? undefined,
+    seat: seat === 'light' || seat === 'dark' ? seat : undefined,
   });
 }

@@ -252,6 +252,33 @@ export function applyMove(state: GameState, move: Move): GameState {
   return next;
 }
 
+/**
+ * Rebuild every state of a game from its options and move list. Trays are derived
+ * from the options seed, so this reproduces the original game exactly, including
+ * each intermediate position so undo keeps working after a reload.
+ *
+ * Throws if any move is illegal, which is what makes a tampered or corrupt saved
+ * game fail loudly instead of loading a broken position.
+ */
+export function replayMoves(
+  options: GameOptions,
+  moves: ReadonlyArray<{ index: number; tileId: string; rotation: Rotation }>,
+): GameState[] {
+  const states: GameState[] = [createGame(options)];
+  for (const move of moves) {
+    const current = states[states.length - 1];
+    states.push(
+      applyMove(current, {
+        index: move.index,
+        tileId: move.tileId,
+        rotation: move.rotation,
+        by: current.turn,
+      }),
+    );
+  }
+  return states;
+}
+
 export function placedCount(state: GameState): number {
   return state.board.reduce((n, cell) => (cell ? n + 1 : n), 0);
 }

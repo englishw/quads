@@ -14,12 +14,36 @@ import { distinctRotations } from '../engine/rules';
 import { tileById } from '../engine/tiles';
 import { boardSvg, type Ghost } from '../render/board';
 import { tileSvg } from '../render/tile';
+import {
+  compareSnapshots,
+  createGameId,
+  decodeSnapshot,
+  encodeSnapshot,
+  isValidGameId,
+  makeSnapshot,
+  normalizeGameId,
+  parseSnapshot,
+  restoreHistory,
+  type PlayMode,
+  type Snapshot,
+} from '../state/snapshot';
+import {
+  canPlayTurn,
+  canUndo,
+  controlsSeat,
+  isTrayHidden,
+  nearSeat,
+  opponentOf,
+  waitingForOpponent,
+  type SeatInfo,
+} from '../state/session';
+import { connectPeer, type PeerSession, type PeerStatus, type StatePayload } from '../net/peer';
 
 /**
  * 'tabletop' suits a device lying flat between the players: Dark's tray is rotated
  * 180 degrees so it reads from the far side. 'upright' suits a monitor or a propped
  * up tablet, where both players look at the screen the same way up and simply take
- * turns, so nothing is ever drawn upside down.
+ * turns, so nothing is ever drawn upside down. A shared game is always upright.
  */
 type ViewMode = 'tabletop' | 'upright';
 
@@ -30,12 +54,35 @@ interface UiState {
   hints: boolean;
   message: string;
   showRules: boolean;
+  showShare: boolean;
+  joinCode: string;
   view: ViewMode;
+}
+
+interface Session {
+  mode: PlayMode;
+  seat: Player;
+  gameId: string;
+  /** Bumped by every new game so two screens can tell a reset from an old position. */
+  epoch: number;
+  peer: PeerSession | null;
+  status: PeerStatus;
+  detail: string;
+  opponentSeat: Player | null;
 }
 
 const PLAYER_NAMES: Record<Player, string> = { light: 'Light', dark: 'Dark' };
 const VIEW_NAMES: Record<ViewMode, string> = { tabletop: 'Tabletop', upright: 'Upright' };
 const VIEW_STORAGE_KEY = 'quads.view';
+const SAVE_STORAGE_KEY = 'quads.save.v1';
+
+const STATUS_LABELS: Record<PeerStatus, string> = {
+  idle: 'Not connected',
+  connecting: 'Connecting',
+  waiting: 'Waiting for the other player',
+  connected: 'Connected',
+  error: 'Connection problem',
+};
 
 function loadViewMode(): ViewMode {
   try {
@@ -54,20 +101,44 @@ function saveViewMode(view: ViewMode): void {
   }
 }
 
+function readSavedGame(): Snapshot | null {
+  try {
+    return decodeSnapshot(localStorage.getItem(SAVE_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function writeSavedGame(snapshot: Snapshot): void {
+  try {
+    localStorage.setItem(SAVE_STORAGE_KEY, encodeSnapshot(snapshot));
+  } catch {
+    // A game that cannot be saved is still perfectly playable.
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      default:
+        return '&#39;';
+    }
+  });
+}
+
 export function mountGame(
   root: HTMLElement,
   dragLayer: HTMLElement,
-  options: { demoMoves?: number; view?: ViewMode } = {},
+  options: { demoMoves?: number; view?: ViewMode; gameId?: string; seat?: Player } = {},
 ): void {
-  let history: GameState[] = [createGame({ seed: Date.now() % 100000 })];
-
-  // `?demo=N` plays N random legal moves before handing over, which makes it easy
-  // to inspect a mid-game position.
-  for (let i = 0; i < (options.demoMoves ?? 0); i += 1) {
-    const moves = legalMoves(history[history.length - 1]);
-    if (moves.length === 0) break;
-    history = [...history, applyMove(history[history.length - 1], moves[i % moves.length])];
-  }
   let ui: UiState = {
     selected: null,
     pending: null,
@@ -75,28 +146,297 @@ export function mountGame(
     hints: true,
     message: 'Light opens by placing a neutral piece anywhere on the board.',
     showRules: false,
+    showShare: false,
+    joinCode: '',
     view: options.view ?? loadViewMode(),
   };
   if (options.view) saveViewMode(options.view);
 
-  const state = () => history[history.length - 1];
+  let states: GameState[] = [];
+  let session: Session = {
+    mode: 'hotseat',
+    seat: 'light',
+    gameId: createGameId(),
+    epoch: 0,
+    peer: null,
+    status: 'idle',
+    detail: '',
+    opponentSeat: null,
+  };
 
-  if ((options.demoMoves ?? 0) > 0) {
-    const s = state();
-    const tileId = availableTileIds(s).find((id) => legalCellsForTile(s, id).size > 0);
-    if (tileId) {
-      const cell = legalCellsForTile(s, tileId).values().next();
-      ui.selected = tileId;
-      ui.pending = cell.done ? null : cell.value;
-      ui.rotation = ui.pending === null ? 0 : (firstLegalRotation(s, ui.pending, tileId, 0) ?? 0);
-    }
-    ui.message = `${PLAYER_NAMES[s.turn]} to play.`;
+  const state = () => states[states.length - 1];
+  const seatInfo = (): SeatInfo => ({ mode: session.mode, seat: session.seat });
+  const effectiveView = (): ViewMode => (session.mode === 'remote' ? 'upright' : ui.view);
+
+  // --- start up: a shared link first, then a saved game, then a fresh game ---
+
+  function loadSnapshot(snapshot: Snapshot): boolean {
+    const restored = restoreHistory(snapshot);
+    if (!restored) return false;
+    states = restored;
+    session = {
+      ...session,
+      mode: snapshot.mode,
+      seat: snapshot.seat,
+      gameId: snapshot.gameId,
+      epoch: snapshot.epoch,
+    };
+    return true;
   }
 
+  const linkedGameId = normalizeGameId(options.gameId);
+  const saved = readSavedGame();
+  let started = false;
+
+  if (isValidGameId(linkedGameId)) {
+    const rejoined = Boolean(saved && saved.gameId === linkedGameId && loadSnapshot(saved));
+    if (rejoined) {
+      // Returning to a shared game we were already playing, seat and all.
+      session.mode = 'remote';
+    } else {
+      // Someone shared this link with us, so we take the Dark seat and pick up the
+      // host's position and tray order once the connection is established.
+      states = [createGame({ seed: 1 })];
+      session = { ...session, mode: 'remote', seat: 'dark', gameId: linkedGameId, epoch: 0 };
+    }
+    // `?seat=light` or `?seat=dark` claims a side explicitly, which settles the case
+    // where both players opened the same link.
+    if (options.seat) session.seat = options.seat;
+    ui.message = rejoined
+      ? `Rejoining game ${session.gameId}. You are ${PLAYER_NAMES[session.seat]}.`
+      : `Joined game ${session.gameId} as ${PLAYER_NAMES[session.seat]}.`;
+    started = true;
+  } else if (saved && loadSnapshot(saved)) {
+    ui.message =
+      saved.mode === 'remote'
+        ? `Rejoining game ${session.gameId}. You are ${PLAYER_NAMES[session.seat]}.`
+        : 'Game restored where you left off.';
+    started = true;
+  }
+
+  if (!started) {
+    states = [createGame({ seed: Date.now() % 100000 })];
+
+    // `?demo=N` plays N random legal moves before handing over, which makes it easy
+    // to inspect a mid-game position. It never disturbs a saved or shared game.
+    const demoMoves = options.demoMoves ?? 0;
+    for (let i = 0; i < demoMoves; i += 1) {
+      const moves = legalMoves(state());
+      if (moves.length === 0) break;
+      states = [...states, applyMove(state(), moves[i % moves.length])];
+    }
+    if (demoMoves > 0) {
+      const s = state();
+      const tileId = availableTileIds(s).find((id) => legalCellsForTile(s, id).size > 0);
+      if (tileId) {
+        const cell = legalCellsForTile(s, tileId).values().next();
+        ui.selected = tileId;
+        ui.pending = cell.done ? null : cell.value;
+        ui.rotation = ui.pending === null ? 0 : (firstLegalRotation(s, ui.pending, tileId, 0) ?? 0);
+      }
+      ui.message = `${PLAYER_NAMES[s.turn]} to play.`;
+    }
+  }
+
+  // --- saving, sharing, syncing --------------------------------------------
+
+  function currentSnapshot(): Snapshot {
+    return makeSnapshot(state(), {
+      gameId: session.gameId,
+      epoch: session.epoch,
+      mode: session.mode,
+      seat: session.seat,
+    });
+  }
+
+  function persist(): void {
+    writeSavedGame(currentSnapshot());
+  }
+
+  function syncUrl(): void {
+    try {
+      const url = new URL(location.href);
+      url.searchParams.delete('demo');
+      if (session.mode === 'remote') url.searchParams.set('game', session.gameId);
+      else url.searchParams.delete('game');
+      window.history.replaceState(null, '', url.toString());
+    } catch {
+      // A browser that refuses history rewriting still plays fine.
+    }
+  }
+
+  function shareLink(): string {
+    return `${location.origin}${location.pathname}?game=${session.gameId}`;
+  }
+
+  function broadcast(): void {
+    session.peer?.broadcast();
+  }
+
+  function handlePayload(payload: StatePayload): void {
+    const remote = parseSnapshot(payload?.snapshot);
+    if (!remote) return;
+    session.opponentSeat =
+      payload.seat === 'light' || payload.seat === 'dark' ? payload.seat : null;
+
+    const decision = compareSnapshots(currentSnapshot(), remote, session.seat);
+    if (decision === 'adopt') {
+      const restored = restoreHistory(remote);
+      if (!restored) return;
+      states = restored;
+      session.epoch = remote.epoch;
+      ui.selected = null;
+      ui.pending = null;
+      ui.rotation = 0;
+      const s = state();
+      ui.message =
+        s.phase === 'finished'
+          ? `${PLAYER_NAMES[s.winner as Player]} wins.`
+          : s.turn === session.seat
+            ? 'Your turn.'
+            : `Waiting for ${PLAYER_NAMES[opponentOf(session.seat)]} to move.`;
+      autoSelect();
+      persist();
+      render();
+    } else if (decision === 'keep') {
+      // We are further along, so push our position back to the other screen.
+      broadcast();
+    } else {
+      render();
+    }
+  }
+
+  async function connect(): Promise<void> {
+    if (session.mode !== 'remote' || session.peer) return;
+    try {
+      session.peer = await connectPeer(session.gameId, {
+        onStatus: (status, detail) => {
+          session.status = status;
+          session.detail = detail ?? '';
+          render();
+        },
+        onPayload: handlePayload,
+        getPayload: () => ({ seat: session.seat, snapshot: currentSnapshot() }),
+      });
+      broadcast();
+    } catch (error) {
+      session.status = 'error';
+      session.detail = error instanceof Error ? error.message : 'could not start the connection';
+      render();
+    }
+  }
+
+  function startShared(): void {
+    session.peer?.leave();
+    const blockDiagonalOpening = state().options.blockDiagonalOpening;
+    session = {
+      ...session,
+      mode: 'remote',
+      seat: 'light',
+      gameId: createGameId(),
+      epoch: session.epoch + 1,
+      peer: null,
+      status: 'connecting',
+      detail: '',
+      opponentSeat: null,
+    };
+    states = [createGame({ seed: Date.now() % 100000, blockDiagonalOpening })];
+    ui = { ...ui, selected: null, pending: null, rotation: 0, showShare: true, showRules: false };
+    ui.message = `Shared game ${session.gameId} created. Send the link to the other player.`;
+    autoSelect();
+    persist();
+    syncUrl();
+    render();
+    void connect();
+  }
+
+  function joinShared(rawCode: string): void {
+    const code = normalizeGameId(rawCode);
+    if (!isValidGameId(code)) {
+      ui.message = 'That game code does not look right.';
+      render();
+      return;
+    }
+    session.peer?.leave();
+    session = {
+      ...session,
+      mode: 'remote',
+      seat: 'dark',
+      gameId: code,
+      epoch: 0,
+      peer: null,
+      status: 'connecting',
+      detail: '',
+      opponentSeat: null,
+    };
+    states = [createGame({ seed: 1 })];
+    ui = { ...ui, selected: null, pending: null, rotation: 0, joinCode: '' };
+    ui.message = `Joining game ${code} as Dark.`;
+    persist();
+    syncUrl();
+    render();
+    void connect();
+  }
+
+  function leaveShared(): void {
+    session.peer?.leave();
+    session = {
+      ...session,
+      mode: 'hotseat',
+      peer: null,
+      status: 'idle',
+      detail: '',
+      opponentSeat: null,
+    };
+    ui.showShare = false;
+    ui.message = 'Left the shared game. You can finish this position on one screen.';
+    autoSelect();
+    persist();
+    syncUrl();
+    render();
+  }
+
+  function switchSeat(): void {
+    session.seat = opponentOf(session.seat);
+    session.opponentSeat = null;
+    ui.selected = null;
+    ui.pending = null;
+    ui.message = `You are now ${PLAYER_NAMES[session.seat]}.`;
+    autoSelect();
+    persist();
+    broadcast();
+    render();
+  }
+
+  function copyShareLink(): void {
+    const link = shareLink();
+    const clipboard = navigator.clipboard;
+    if (clipboard && typeof clipboard.writeText === 'function') {
+      void clipboard.writeText(link).then(
+        () => {
+          ui.message = 'Link copied.';
+          render();
+        },
+        () => {
+          ui.message = 'Could not copy automatically. Select the link and copy it.';
+          render();
+        },
+      );
+      return;
+    }
+    root.querySelector<HTMLInputElement>('[data-field="share-link"]')?.select();
+    ui.message = 'Select the link and copy it.';
+    render();
+  }
+
+  // --- game actions ---------------------------------------------------------
+
   function autoSelect(): void {
-    const available = availableTileIds(state());
+    const s = state();
+    const available = availableTileIds(s);
     if (ui.selected && available.includes(ui.selected)) return;
-    ui.selected = state().phase === 'opening' && available.length > 0 ? available[0] : null;
+    const mayPlay = canPlayTurn(s, seatInfo());
+    ui.selected = mayPlay && s.phase === 'opening' && available.length > 0 ? available[0] : null;
     ui.pending = null;
     ui.rotation = 0;
   }
@@ -112,7 +452,18 @@ export function mountGame(
     return legalCellsForTile(state(), ui.selected);
   }
 
+  function notYourTurnMessage(): string {
+    const s = state();
+    if (s.phase === 'finished') return 'The game is over.';
+    return `It is ${PLAYER_NAMES[s.turn]}'s turn on the other screen.`;
+  }
+
   function selectTile(tileId: string): void {
+    if (!canPlayTurn(state(), seatInfo())) {
+      ui.message = notYourTurnMessage();
+      render();
+      return;
+    }
     if (!availableTileIds(state()).includes(tileId)) return;
     if (ui.selected !== tileId) {
       ui.selected = tileId;
@@ -128,7 +479,11 @@ export function mountGame(
   }
 
   function targetCell(index: number): void {
-    if (state().phase === 'finished') return;
+    if (!canPlayTurn(state(), seatInfo())) {
+      ui.message = notYourTurnMessage();
+      render();
+      return;
+    }
     if (!ui.selected) {
       ui.message = 'Choose one of your pieces first.';
       render();
@@ -152,7 +507,9 @@ export function mountGame(
 
   function rotate(): void {
     if (!ui.selected) {
-      ui.message = 'Choose one of your pieces first.';
+      ui.message = canPlayTurn(state(), seatInfo())
+        ? 'Choose one of your pieces first.'
+        : notYourTurnMessage();
       render();
       return;
     }
@@ -173,6 +530,11 @@ export function mountGame(
 
   function place(): void {
     if (ui.selected === null || ui.pending === null) return;
+    if (!canPlayTurn(state(), seatInfo())) {
+      ui.message = notYourTurnMessage();
+      render();
+      return;
+    }
     const check = isLegalMove(state(), ui.pending, ui.selected, ui.rotation);
     if (!check.ok) {
       ui.message = check.reason;
@@ -186,7 +548,7 @@ export function mountGame(
       rotation: ui.rotation,
       by: current.turn,
     });
-    history = [...history, next];
+    states = [...states, next];
     ui.selected = null;
     ui.pending = null;
     ui.rotation = 0;
@@ -194,11 +556,15 @@ export function mountGame(
       ui.message = `${PLAYER_NAMES[next.turn]} has no legal move. ${PLAYER_NAMES[next.winner as Player]} wins.`;
     } else if (next.phase === 'opening') {
       ui.message = 'Dark places the other neutral piece, but not next to the first one.';
+    } else if (session.mode === 'remote') {
+      ui.message = `Waiting for ${PLAYER_NAMES[opponentOf(session.seat)]} to move.`;
     } else {
       const count = legalMoves(next).length;
       ui.message = `${PLAYER_NAMES[next.turn]} to play. ${count} legal move${count === 1 ? '' : 's'} available.`;
     }
     autoSelect();
+    persist();
+    broadcast();
     render();
   }
 
@@ -210,22 +576,32 @@ export function mountGame(
   }
 
   function undo(): void {
-    if (history.length <= 1) {
-      ui.message = 'Nothing to undo.';
+    if (!canUndo(seatInfo(), states.length)) {
+      ui.message =
+        session.mode === 'remote'
+          ? 'Undo is only available in a one-screen game.'
+          : 'Nothing to undo.';
       render();
       return;
     }
-    history = history.slice(0, -1);
+    states = states.slice(0, -1);
     ui.selected = null;
     ui.pending = null;
     ui.rotation = 0;
     ui.message = `Move undone. ${PLAYER_NAMES[state().turn]} to play.`;
     autoSelect();
+    persist();
     render();
   }
 
   function newGame(): void {
-    history = [createGame({ seed: Date.now() % 100000, blockDiagonalOpening: state().options.blockDiagonalOpening })];
+    states = [
+      createGame({
+        seed: Date.now() % 100000,
+        blockDiagonalOpening: state().options.blockDiagonalOpening,
+      }),
+    ];
+    session.epoch += 1;
     ui = {
       ...ui,
       selected: null,
@@ -234,6 +610,8 @@ export function mountGame(
       message: 'New game. Light opens by placing a neutral piece anywhere on the board.',
     };
     autoSelect();
+    persist();
+    broadcast();
     render();
   }
 
@@ -248,6 +626,11 @@ export function mountGame(
   }
 
   function toggleViewMode(): void {
+    if (session.mode === 'remote') {
+      ui.message = 'A shared game always stays upright on both screens.';
+      render();
+      return;
+    }
     setViewMode(ui.view === 'tabletop' ? 'upright' : 'tabletop');
   }
 
@@ -260,55 +643,91 @@ export function mountGame(
       ...current,
       options: { ...current.options, blockDiagonalOpening: !current.options.blockDiagonalOpening },
     };
-    history = [...history.slice(0, -1), next];
+    states = [...states.slice(0, -1), next];
+    persist();
     render();
   }
 
+  // --- markup ---------------------------------------------------------------
+
   function panelMarkup(player: Player): string {
     const s = state();
-    const active = s.phase !== 'finished' && s.turn === player;
+    const info = seatInfo();
+    const mine = controlsSeat(info, player);
+    const active = s.phase !== 'finished' && s.turn === player && mine;
     const hand = s.hands[player];
+    const hidden = isTrayHidden(info, player);
     const openingPiece = s.phase === 'opening' && active ? availableTileIds(s)[0] : null;
-    // Both players keep their pieces face up the whole game; during the opening only
-    // the neutral piece can actually be played.
-    const tiles = openingPiece ? [openingPiece, ...hand] : hand;
-    const buttons = tiles
-      .map((tileId) => {
-        const tile = tileById(tileId);
-        const selected = ui.selected === tileId;
-        const rotation = selected ? ui.rotation : 0;
-        const disabled = !active || (openingPiece !== null && tileId !== openingPiece);
-        return (
-          `<button type="button" class="tile-btn${selected ? ' is-selected' : ''}" data-tile="${tileId}"` +
-          ` aria-pressed="${selected}"${disabled ? ' disabled' : ''}` +
-          ` aria-label="Piece ${tileId}">${tileSvg(tile.sides, rotation)}</button>`
-        );
-      })
-      .join('');
-    const label = openingPiece
-      ? `Place the neutral piece · ${hand.length} of your own`
-      : `${hand.length} pieces left`;
-    return `
-      <section class="panel panel--${player}${active ? ' is-active' : ''}" data-player="${player}">
-        <header class="panel__bar">
-          <span class="panel__name">${PLAYER_NAMES[player]}</span>
-          <span class="panel__status">${active ? 'Your turn' : 'Waiting'}</span>
-          <span class="panel__count">${label}</span>
-        </header>
-        <div class="panel__controls">
+
+    let tray: string;
+    let label: string;
+    if (hidden) {
+      // Only piece backs reach the DOM, so the opponent's tray really is unread.
+      tray = hand
+        .map(() => `<span class="tile-back tile-back--${player}" aria-hidden="true"></span>`)
+        .join('');
+      label = `${hand.length} pieces, hidden`;
+    } else {
+      // Both players keep their pieces face up in a one-screen game; during the
+      // opening only the neutral piece can actually be played.
+      const tiles = openingPiece ? [openingPiece, ...hand] : hand;
+      tray = tiles
+        .map((tileId) => {
+          const tile = tileById(tileId);
+          const selected = ui.selected === tileId;
+          const rotation = selected ? ui.rotation : 0;
+          const disabled = !active || (openingPiece !== null && tileId !== openingPiece);
+          return (
+            `<button type="button" class="tile-btn${selected ? ' is-selected' : ''}" data-tile="${tileId}"` +
+            ` aria-pressed="${selected}"${disabled ? ' disabled' : ''}` +
+            ` aria-label="Piece ${tileId}">${tileSvg(tile.sides, rotation)}</button>`
+          );
+        })
+        .join('');
+      label = openingPiece
+        ? `Place the neutral piece &middot; ${hand.length} of your own`
+        : `${hand.length} pieces left`;
+    }
+
+    const youBadge =
+      session.mode === 'remote' && info.seat === player ? '<span class="badge">You</span>' : '';
+    const statusWord = active
+      ? 'Your turn'
+      : s.turn === player && s.phase !== 'finished'
+        ? 'Thinking'
+        : 'Waiting';
+    const controls = mine
+      ? `<div class="panel__controls">
           <button type="button" class="btn" data-action="rotate"${active ? '' : ' disabled'}>Rotate</button>
           <button type="button" class="btn btn--primary" data-action="place"${active && ghost()?.valid ? '' : ' disabled'}>Place</button>
           <button type="button" class="btn" data-action="cancel"${active && ui.pending !== null ? '' : ' disabled'}>Clear</button>
-        </div>
-        <div class="tray" role="group" aria-label="${PLAYER_NAMES[player]} pieces">${buttons}</div>
+        </div>`
+      : '';
+
+    return `
+      <section class="panel panel--${player}${active ? ' is-active' : ''}" data-player="${player}">
+        <header class="panel__bar">
+          <span class="panel__name">${PLAYER_NAMES[player]}</span>${youBadge}
+          <span class="panel__status">${statusWord}</span>
+          <span class="panel__count">${label}</span>
+        </header>
+        ${controls}
+        <div class="tray" role="group" aria-label="${PLAYER_NAMES[player]} pieces">${tray}</div>
       </section>`;
   }
 
   function rulesMarkup(): string {
     if (!ui.showRules) return '';
     const s = state();
+    const viewSection =
+      session.mode === 'remote'
+        ? '<p class="note">A shared game always stays upright on both screens.</p>'
+        : `<div class="segment" role="group" aria-label="View mode">
+          <button type="button" class="btn${ui.view === 'tabletop' ? ' is-on' : ''}" data-action="view-tabletop" aria-pressed="${ui.view === 'tabletop'}">Tabletop &mdash; device lies flat, Dark's tray is upside down</button>
+          <button type="button" class="btn${ui.view === 'upright' ? ' is-on' : ''}" data-action="view-upright" aria-pressed="${ui.view === 'upright'}">Upright &mdash; screen stands up, both players take turns the same way up</button>
+        </div>`;
     return `
-      <div class="rules" role="dialog" aria-label="Rules and settings">
+      <div class="dialog" role="dialog" aria-label="Rules and settings">
         <h2>How to play</h2>
         <ul>
           <li>Light opens with a neutral piece anywhere. Dark then places the other neutral piece, but not next to the first.</li>
@@ -318,10 +737,7 @@ export function mountGame(
           <li>If the player to move has no legal placement, the other player wins.</li>
         </ul>
         <h2>View</h2>
-        <div class="segment" role="group" aria-label="View mode">
-          <button type="button" class="btn${ui.view === 'tabletop' ? ' is-on' : ''}" data-action="view-tabletop" aria-pressed="${ui.view === 'tabletop'}">Tabletop &mdash; device lies flat, Dark's tray is upside down</button>
-          <button type="button" class="btn${ui.view === 'upright' ? ' is-on' : ''}" data-action="view-upright" aria-pressed="${ui.view === 'upright'}">Upright &mdash; screen stands up, both players take turns the same way up</button>
-        </div>
+        ${viewSection}
         <h2>Settings</h2>
         <label class="check">
           <input type="checkbox" data-action="diagonal" ${s.options.blockDiagonalOpening ? 'checked' : ''}/>
@@ -331,12 +747,51 @@ export function mountGame(
       </div>`;
   }
 
+  function shareMarkup(): string {
+    if (!ui.showShare) return '';
+    if (session.mode === 'hotseat') {
+      return `
+        <div class="dialog" role="dialog" aria-label="Play on two screens">
+          <h2>Play on two screens</h2>
+          <p class="note">Each player uses their own device and sees only their own pieces. Moves travel directly between the two browsers, so both pages need to stay open. Undo is only available in a one-screen game.</p>
+          <button type="button" class="btn btn--primary" data-action="share-create">Create a shared game</button>
+          <h2>Join a game</h2>
+          <div class="share-row">
+            <input class="input" data-field="join-code" value="${escapeHtml(ui.joinCode)}" placeholder="Game code" maxlength="12" autocapitalize="characters" spellcheck="false" aria-label="Game code"/>
+            <button type="button" class="btn" data-action="share-join">Join</button>
+          </div>
+          <button type="button" class="btn" data-action="share">Close</button>
+        </div>`;
+    }
+    const conflict =
+      session.opponentSeat === session.seat
+        ? `<p class="note note--warn">The other screen is also playing ${PLAYER_NAMES[session.seat]}. One of you should switch.</p>
+           <button type="button" class="btn" data-action="share-switch">Switch me to ${PLAYER_NAMES[opponentOf(session.seat)]}</button>`
+        : '';
+    return `
+      <div class="dialog" role="dialog" aria-label="Shared game">
+        <h2>Shared game ${session.gameId}</h2>
+        <p class="note">You are <strong>${PLAYER_NAMES[session.seat]}</strong>. Status: ${STATUS_LABELS[session.status]}${session.detail ? ` (${escapeHtml(session.detail)})` : ''}.</p>
+        <div class="share-row">
+          <input class="input" data-field="share-link" value="${escapeHtml(shareLink())}" readonly aria-label="Link to share"/>
+          <button type="button" class="btn" data-action="share-copy">Copy</button>
+        </div>
+        <p class="note">Send that link, or just the code <strong>${session.gameId}</strong>, to the other player. Refreshing either screen reconnects to this game.</p>
+        ${conflict}
+        <button type="button" class="btn" data-action="share-leave">Leave shared game</button>
+        <button type="button" class="btn" data-action="share">Close</button>
+      </div>`;
+  }
+
   function resultMarkup(): string {
     const s = state();
     if (s.phase !== 'finished' || !s.winner) return '';
     const text = `${PLAYER_NAMES[s.winner]} wins — ${PLAYER_NAMES[s.turn]} has no legal move.`;
     // In tabletop view the result is repeated upside down so both sides can read it.
-    const flipped = ui.view === 'tabletop' ? `<p class="result__text result__text--flipped">${text}</p>` : '';
+    const flipped =
+      effectiveView() === 'tabletop'
+        ? `<p class="result__text result__text--flipped">${text}</p>`
+        : '';
     return `
       <div class="result" role="alert">
         ${flipped}
@@ -345,27 +800,61 @@ export function mountGame(
       </div>`;
   }
 
+  function statusLine(): string {
+    const s = state();
+    if (session.mode === 'remote' && session.status !== 'connected' && s.phase !== 'finished') {
+      const detail = session.detail ? ` (${escapeHtml(session.detail)})` : '';
+      return `${STATUS_LABELS[session.status]}${detail} &middot; code ${session.gameId}`;
+    }
+    if (waitingForOpponent(s, seatInfo())) {
+      return `Waiting for ${PLAYER_NAMES[opponentOf(session.seat)]} to move.`;
+    }
+    return ui.message;
+  }
+
+  function toolbarMarkup(): string {
+    const remote = session.mode === 'remote';
+    const undoAllowed = canUndo(seatInfo(), states.length);
+    const viewButton = remote
+      ? ''
+      : `<button type="button" class="btn" data-action="view" title="Switch between a flat tabletop layout and an upright screen layout">View: ${VIEW_NAMES[ui.view]}</button>`;
+    const pill = remote
+      ? `<span class="pill pill--${session.status}">${STATUS_LABELS[session.status]}</span>`
+      : '';
+    return `
+      <div class="toolbar">
+        <button type="button" class="btn" data-action="undo"${undoAllowed ? '' : ' disabled'} title="${remote ? 'Undo is only available in a one-screen game' : 'Take back the last move'}">Undo</button>
+        <button type="button" class="btn" data-action="new">New game</button>
+        <button type="button" class="btn" data-action="hints" aria-pressed="${ui.hints}">Hints ${ui.hints ? 'on' : 'off'}</button>
+        ${viewButton}
+        <button type="button" class="btn" data-action="share">${remote ? `Game ${session.gameId}` : 'Two screens'}</button>
+        <button type="button" class="btn" data-action="rules">Rules</button>
+        ${pill}
+        <span class="counter">${placedCount(state())} / 36 placed</span>
+      </div>`;
+  }
+
   function render(): void {
     const s = state();
-    const view = { legalCells: legalCells(), ghost: ghost(), lastMoveIndex: s.history.length > 0 ? s.history[s.history.length - 1].index : null };
+    const near = nearSeat(seatInfo());
+    const far = opponentOf(near);
+    const view = {
+      legalCells: legalCells(),
+      ghost: ghost(),
+      lastMoveIndex: s.history.length > 0 ? s.history[s.history.length - 1].index : null,
+    };
     root.innerHTML = `
-      <div class="table" data-turn="${s.turn}" data-phase="${s.phase}" data-view="${ui.view}">
-        ${panelMarkup('dark')}
+      <div class="table" data-turn="${s.turn}" data-phase="${s.phase}" data-view="${effectiveView()}" data-mode="${session.mode}">
+        ${panelMarkup(far)}
         <div class="board-area">
           <div class="board-wrap">${boardSvg(s, view)}</div>
-          <p class="status" role="status" aria-live="polite">${ui.message}</p>
-          <div class="toolbar">
-            <button type="button" class="btn" data-action="undo"${history.length > 1 ? '' : ' disabled'}>Undo</button>
-            <button type="button" class="btn" data-action="new">New game</button>
-            <button type="button" class="btn" data-action="hints" aria-pressed="${ui.hints}">Hints ${ui.hints ? 'on' : 'off'}</button>
-            <button type="button" class="btn" data-action="view" title="Switch between a flat tabletop layout and an upright screen layout">View: ${VIEW_NAMES[ui.view]}</button>
-            <button type="button" class="btn" data-action="rules">Rules</button>
-            <span class="counter">${placedCount(s)} / 36 placed</span>
-          </div>
+          <p class="status" role="status" aria-live="polite">${statusLine()}</p>
+          ${toolbarMarkup()}
           ${rulesMarkup()}
+          ${shareMarkup()}
           ${resultMarkup()}
         </div>
-        ${panelMarkup('light')}
+        ${panelMarkup(near)}
       </div>`;
   }
 
@@ -458,6 +947,15 @@ export function mountGame(
     clearHover();
   });
 
+  root.addEventListener('input', (event) => {
+    const target = event.target as HTMLInputElement | null;
+    if (target?.dataset.field === 'join-code') {
+      // Handled without a re-render so the caret does not jump while typing.
+      ui.joinCode = normalizeGameId(target.value);
+      target.value = ui.joinCode;
+    }
+  });
+
   root.addEventListener('click', (event) => {
     if (suppressClick) {
       suppressClick = false;
@@ -490,6 +988,7 @@ export function mountGame(
           return;
         case 'rules':
           ui.showRules = !ui.showRules;
+          if (ui.showRules) ui.showShare = false;
           render();
           return;
         case 'view':
@@ -503,6 +1002,26 @@ export function mountGame(
           return;
         case 'diagonal':
           toggleDiagonalRule();
+          return;
+        case 'share':
+          ui.showShare = !ui.showShare;
+          if (ui.showShare) ui.showRules = false;
+          render();
+          return;
+        case 'share-create':
+          startShared();
+          return;
+        case 'share-join':
+          joinShared(ui.joinCode);
+          return;
+        case 'share-copy':
+          copyShareLink();
+          return;
+        case 'share-leave':
+          leaveShared();
+          return;
+        case 'share-switch':
+          switchSeat();
           return;
         default:
           return;
@@ -522,6 +1041,12 @@ export function mountGame(
   });
 
   window.addEventListener('keydown', (event) => {
+    const target = event.target as HTMLElement | null;
+    // Never treat typing in a field as a game shortcut.
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+      if (event.key === 'Enter' && target.dataset.field === 'join-code') joinShared(ui.joinCode);
+      return;
+    }
     const key = event.key.toLowerCase();
     if (key === 'r') {
       rotate();
@@ -561,5 +1086,8 @@ export function mountGame(
   });
 
   autoSelect();
+  persist();
+  syncUrl();
   render();
+  if (session.mode === 'remote') void connect();
 }
