@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Browser-playable, touch-friendly two-player hotseat version of the board game Quads",
+  "description": "Browser-playable, touch-friendly Quads: two players on one screen, or on two devices with a shared game code",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

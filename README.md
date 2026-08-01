@@ -132,7 +132,7 @@ its side code, which is handy for comparing against the physical set.
 ```bash
 npm install
 npm run dev        # local dev server
-npm test           # engine, snapshot and session tests, plus a self-play fuzz test
+npm test           # engine, state and network tests, plus a random self-play fuzz test
 npm run typecheck  # TypeScript, no emit
 npm run build      # production build into dist/
 ```
