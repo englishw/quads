@@ -58,6 +58,36 @@ export function normalizeGameId(raw: string | null | undefined): string {
     .slice(0, MAX_GAME_ID_LENGTH);
 }
 
+/**
+ * If the player pasted the full share URL, use its game parameter. Otherwise treat
+ * the whole field as the code they intended to enter.
+ */
+export function gameIdCandidate(raw: string | null | undefined): string {
+  const text = raw?.trim() ?? '';
+  if (!text) return '';
+  const match = /[?&]game=([^&#\s]+)/i.exec(text);
+  if (match?.[1]) return decodeURIComponent(match[1]);
+  try {
+    const url = new URL(text);
+    return url.searchParams.get('game') ?? text;
+  } catch {
+    return text;
+  }
+}
+
+export function extractGameId(raw: string | null | undefined): string {
+  return normalizeGameId(gameIdCandidate(raw));
+}
+
+/**
+ * Codes never contain I, O, 0 or 1, so those characters in the actual code field
+ * mean it was misread. Silently dropping them can put the player in a different
+ * empty game, which is worse than rejecting the input.
+ */
+export function hasAmbiguousCharacters(raw: string | null | undefined): boolean {
+  return /[IO01]/i.test(gameIdCandidate(raw));
+}
+
 export function isValidGameId(id: string): boolean {
   return id.length >= MIN_GAME_ID_LENGTH && normalizeGameId(id) === id;
 }

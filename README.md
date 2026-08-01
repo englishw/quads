@@ -24,8 +24,11 @@ thing that clears it.
 
 Press **Two screens** in the toolbar and choose **Create a shared game**. You get a short game code
 like `KMQ47F` and a link to send to the other player. Whoever creates the game plays Light and moves
-first; whoever opens the link plays Dark. The other player can also type the code into the same dialog
-and press Join.
+first; whoever opens the link plays Dark. The other player can also paste the code, or the whole link,
+into the same dialog and press Join.
+
+The two devices do not need to be on the same network. Home wifi to mobile data works, as does one
+player on the other side of the country.
 
 In a shared game you only see your own pieces; your opponent's tray is drawn as face-down backs with a
 count. Be aware this is a convenience rather than secrecy — in Quads each player holds every piece of
@@ -33,8 +36,11 @@ their own colour, so what is left in a hand can always be worked out from the bo
 
 Other things worth knowing:
 
-- The two browsers talk **directly to each other** over WebRTC. Nothing is hosted for this, which is
-  why it works from a static site, but both pages have to stay open for moves to travel.
+- Moves are relayed through public MQTT brokers over WebSockets. Nothing is hosted for this, which is
+  why it works from a static site.
+- **The other player does not have to be online at the same time.** Each side leaves its latest
+  position on the broker, so you can play a move, close the tab, and your opponent will find the
+  current board whenever they open the link.
 - The layout is always upright in a shared game, and your own tray is always the one nearest you.
 - Refreshing either screen reconnects to the same game and the same colour.
 - **Undo is only available in a one-screen game**, so there is nothing to dispute remotely.
@@ -42,6 +48,8 @@ Other things worth knowing:
   can finish it face to face.
 - If both players somehow end up on the same colour, the dialog offers to switch one of you. You can
   also force a side with `?seat=light` or `?seat=dark` on the link.
+- Game codes never contain `I`, `O`, `0` or `1`, so they are safe to read out. If you type one of
+  those by mistake the app tells you instead of quietly joining a different game.
 
 ## Rules
 
@@ -107,12 +115,14 @@ its side code, which is handy for comparing against the physical set.
 
 ## Limitations
 
-- Two-screen play relies on public WebRTC signaling relays. It works from any static host, but a
-  restrictive network or a symmetric NAT can stop two browsers from pairing, and there is no TURN
-  server to fall back on. One-screen play never touches the network.
-- Both pages must stay open during a shared game. There is no server holding the position, so moves
-  only travel while the two browsers are connected. The position itself is saved on each device, so
-  reopening the link resumes the game.
+- Two-screen play depends on public MQTT brokers (`broker.emqx.io`, `test.mosquitto.org` and
+  `broker.hivemq.com`). They are free, best-effort services with no uptime promise. All three are used
+  at once, so one going down is survivable, but if a network blocks outbound WebSockets on those ports
+  a shared game cannot connect. One-screen play never touches the network.
+- Traffic is plain text on a public broker, and the topic contains the game code. Anyone who knew or
+  guessed a code could watch a game or inject a move; the engine still rejects illegal moves, so the
+  worst case is nuisance rather than corruption. There is nothing sensitive in a game of Quads, so this
+  was a deliberate trade for keeping the app serverless and accountless.
 - A hidden tray is a convenience, not hidden information; see the note above.
 - Variation 1 (pieces stood on edge) and Variation 2 (matching the board's own border) from the
   rulebook are not implemented, and there is no AI opponent or move clock.
@@ -131,7 +141,7 @@ Layout:
 
 - `src/engine` — pure game logic: piece set, rotation, matching, turn flow, endgame detection
 - `src/state` — saved-game snapshots, game codes, replay-based restore, seat authority
-- `src/net` — the Trystero peer-to-peer wrapper, loaded on demand only for shared games
+- `src/net` — a minimal MQTT 3.1.1 client over WebSockets, and the relay that carries game state
 - `src/render` — SVG generation for pieces and the board
 - `src/ui` — interface, pointer/touch handling, share dialog, piece gallery
 - `.github/workflows/deploy.yml` — test, build and publish to GitHub Pages
@@ -141,13 +151,24 @@ the engine. That reproduces every intermediate position for undo, and means a co
 fails validation and is discarded instead of loading an illegal board. The same snapshot is what the
 two screens exchange: whichever side is further ahead wins, so a reconnect resynchronises by itself.
 
-Two dependency notes:
+### Why the transport looks like this
 
-- `trystero` is a runtime dependency but is only ever reached through a dynamic import, so it lands in
-  a separate chunk that a one-screen game never downloads.
-- `package.json` overrides `rollup` with `@rollup/wasm-node`. Rollup's native binary fails to load on
-  some machines (it was failing on Windows ARM64 during development); the WebAssembly build is a
-  little slower but works everywhere, including CI.
+Two-screen play originally used WebRTC via Trystero. It worked between devices on the same wifi and
+failed reliably when one player was on mobile data: carrier-grade NAT is usually symmetric, so the two
+browsers exchanged connection details and then could not open a direct path. That needs a TURN relay,
+which means depending on a third-party service anyway — to preserve low latency that a turn-based game
+with one-kilobyte messages does not need.
+
+Relaying through a broker is an ordinary outbound WebSocket, so NAT is irrelevant, and MQTT's retained
+messages give asynchronous play for free. The MQTT client is written out in `src/net/mqtt.ts` rather
+than taken from npm: the library is 365 kB, ten times the whole game, and it would be downloaded over
+exactly the mobile connection this change exists to support. Only CONNECT, SUBSCRIBE, PUBLISH and
+keepalives are needed, the wire format is small and fully specified, and the codec is covered by unit
+tests. The app therefore ships with **no runtime dependencies at all**.
+
+One build note: `package.json` overrides `rollup` with `@rollup/wasm-node`. Rollup's native binary
+fails to load on some machines (it was failing on Windows ARM64 during development); the WebAssembly
+build is a little slower but works everywhere, including CI.
 
 ## Deployment
 

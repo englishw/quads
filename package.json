@@ -20,8 +20,5 @@
   },
   "overrides": {
     "rollup": "npm:@rollup/wasm-node@^4.52.5"
-  },
-  "dependencies": {
-    "trystero": "^0.25.3"
   }
 }

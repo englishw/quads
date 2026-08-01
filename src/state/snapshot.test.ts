@@ -6,6 +6,8 @@ import {
   createGameId,
   decodeSnapshot,
   encodeSnapshot,
+  extractGameId,
+  hasAmbiguousCharacters,
   isValidGameId,
   makeSnapshot,
   normalizeGameId,
@@ -51,11 +53,29 @@ describe('game codes', () => {
     }
   });
 
-  it('cleans up whatever the player pasted', () => {
+  it('cleans up whatever the player typed', () => {
     expect(normalizeGameId(' abc-234 ')).toBe('ABC234');
-    expect(normalizeGameId('https://x.io/quads/?game=abc234')).toBe('HTTPSXQUADSGAMEABC234'.slice(0, 12));
     expect(normalizeGameId('io01')).toBe('');
     expect(normalizeGameId(null)).toBe('');
+  });
+
+  it('takes the code out of a pasted share link', () => {
+    expect(extractGameId('https://englishw.github.io/quads/?game=abc234')).toBe('ABC234');
+    expect(extractGameId('https://englishw.github.io/quads/?view=upright&game=KMQ47F')).toBe(
+      'KMQ47F',
+    );
+    expect(extractGameId('  abc234  ')).toBe('ABC234');
+    expect(extractGameId('')).toBe('');
+  });
+
+  it('flags codes containing characters that are never generated', () => {
+    // Silently dropping these would send the player to a different, empty game.
+    expect(hasAmbiguousCharacters('RLY190')).toBe(true);
+    expect(hasAmbiguousCharacters('abc0')).toBe(true);
+    expect(hasAmbiguousCharacters('ABCI23')).toBe(true);
+    expect(hasAmbiguousCharacters('ABC234')).toBe(false);
+    // A pasted link is judged on its code, not the surrounding URL.
+    expect(hasAmbiguousCharacters('https://englishw.github.io/quads/?game=ABC234')).toBe(false);
   });
 
   it('rejects codes that are too short or contain ambiguous characters', () => {

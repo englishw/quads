@@ -19,6 +19,8 @@ import {
   createGameId,
   decodeSnapshot,
   encodeSnapshot,
+  extractGameId,
+  hasAmbiguousCharacters,
   isValidGameId,
   makeSnapshot,
   normalizeGameId,
@@ -37,7 +39,12 @@ import {
   waitingForOpponent,
   type SeatInfo,
 } from '../state/session';
-import { connectPeer, type PeerSession, type PeerStatus, type StatePayload } from '../net/peer';
+import {
+  connectRelay,
+  type RelaySession,
+  type RelayStatus,
+  type StatePayload,
+} from '../net/relay';
 
 /**
  * 'tabletop' suits a device lying flat between the players: Dark's tray is rotated
@@ -65,8 +72,8 @@ interface Session {
   gameId: string;
   /** Bumped by every new game so two screens can tell a reset from an old position. */
   epoch: number;
-  peer: PeerSession | null;
-  status: PeerStatus;
+  peer: RelaySession | null;
+  status: RelayStatus;
   detail: string;
   opponentSeat: Player | null;
 }
@@ -76,7 +83,7 @@ const VIEW_NAMES: Record<ViewMode, string> = { tabletop: 'Tabletop', upright: 'U
 const VIEW_STORAGE_KEY = 'quads.view';
 const SAVE_STORAGE_KEY = 'quads.save.v1';
 
-const STATUS_LABELS: Record<PeerStatus, string> = {
+const STATUS_LABELS: Record<RelayStatus, string> = {
   idle: 'Not connected',
   connecting: 'Connecting',
   waiting: 'Waiting for the other player',
@@ -301,15 +308,15 @@ export function mountGame(
     } else if (decision === 'keep') {
       // We are further along, so push our position back to the other screen.
       broadcast();
-    } else {
-      render();
     }
+    // 'same' needs nothing: heartbeats repeat the current position, and any status
+    // change is rendered by the status hook instead.
   }
 
   async function connect(): Promise<void> {
     if (session.mode !== 'remote' || session.peer) return;
     try {
-      session.peer = await connectPeer(session.gameId, {
+      session.peer = await connectRelay(session.gameId, {
         onStatus: (status, detail) => {
           session.status = status;
           session.detail = detail ?? '';
@@ -351,7 +358,15 @@ export function mountGame(
   }
 
   function joinShared(rawCode: string): void {
-    const code = normalizeGameId(rawCode);
+    // Codes are generated without I, O, 0 or 1, so seeing one means the code was
+    // misread. Quietly dropping the character would join a different, empty game.
+    if (hasAmbiguousCharacters(rawCode)) {
+      ui.message =
+        'Game codes never contain I, O, 0 or 1. Check those characters and try again.';
+      render();
+      return;
+    }
+    const code = extractGameId(rawCode);
     if (!isValidGameId(code)) {
       ui.message = 'That game code does not look right.';
       render();
@@ -753,11 +768,11 @@ export function mountGame(
       return `
         <div class="dialog" role="dialog" aria-label="Play on two screens">
           <h2>Play on two screens</h2>
-          <p class="note">Each player uses their own device and sees only their own pieces. Moves travel directly between the two browsers, so both pages need to stay open. Undo is only available in a one-screen game.</p>
+          <p class="note">Each player uses their own device and sees only their own pieces. Moves are relayed through public message brokers, so this works across different networks and the other player does not have to be online at the same time. Undo is only available in a one-screen game.</p>
           <button type="button" class="btn btn--primary" data-action="share-create">Create a shared game</button>
           <h2>Join a game</h2>
           <div class="share-row">
-            <input class="input" data-field="join-code" value="${escapeHtml(ui.joinCode)}" placeholder="Game code" maxlength="12" autocapitalize="characters" spellcheck="false" aria-label="Game code"/>
+            <input class="input" data-field="join-code" value="${escapeHtml(ui.joinCode)}" placeholder="Game code or link" maxlength="200" autocapitalize="characters" spellcheck="false" aria-label="Game code or link"/>
             <button type="button" class="btn" data-action="share-join">Join</button>
           </div>
           <button type="button" class="btn" data-action="share">Close</button>
@@ -776,7 +791,7 @@ export function mountGame(
           <input class="input" data-field="share-link" value="${escapeHtml(shareLink())}" readonly aria-label="Link to share"/>
           <button type="button" class="btn" data-action="share-copy">Copy</button>
         </div>
-        <p class="note">Send that link, or just the code <strong>${session.gameId}</strong>, to the other player. Refreshing either screen reconnects to this game.</p>
+        <p class="note">Send that link, or just the code <strong>${session.gameId}</strong>, to the other player. Refreshing either screen reconnects to this game, and the latest position is waiting whenever the other player opens it.</p>
         ${conflict}
         <button type="button" class="btn" data-action="share-leave">Leave shared game</button>
         <button type="button" class="btn" data-action="share">Close</button>
@@ -950,9 +965,9 @@ export function mountGame(
   root.addEventListener('input', (event) => {
     const target = event.target as HTMLInputElement | null;
     if (target?.dataset.field === 'join-code') {
-      // Handled without a re-render so the caret does not jump while typing.
-      ui.joinCode = normalizeGameId(target.value);
-      target.value = ui.joinCode;
+      // Kept exactly as typed, without a re-render, so the caret does not jump and a
+      // pasted share link still works. It is interpreted when Join is pressed.
+      ui.joinCode = target.value;
     }
   });
 
