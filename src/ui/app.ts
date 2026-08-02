@@ -790,6 +790,7 @@ export function mountGame(
     return `
       <div class="dialog" role="dialog" aria-label="Rules and settings">
         <h2>How to play</h2>
+        <p class="note">Light opens with a neutral piece anywhere on the board. Dark then places the other neutral piece, but not next to the first one.</p>
         <ul>
           <li>Place one of your own pieces each turn so it touches at least one piece already on the board.</li>
           <li>Every pair of touching sides must match: the same color meets the same color, and the same line style meets the same line style.</li>
