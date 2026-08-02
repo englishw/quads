@@ -74,6 +74,8 @@ An optional setting also forbids the second neutral piece from touching the firs
   You can also drag a piece straight from your tray onto the board.
 - **Rotate**: the Rotate button in your own panel, or the `R` key.
 - **Place / clear**: the Place and Clear buttons, or `Enter` and `Escape`.
+- **Two players / Practice**: use the toolbar mode selector to switch between local two-player play
+  and a solo practice game against Dark. Practice mode offers Easy, Medium and Hard AI levels.
 - **Undo, New game, Hints, View, Two screens**: the toolbar under the board; `U`, `H` and `V` are
   shortcuts for undo, hints and the view toggle.
 - **Keyboard aiming**: arrow keys move the aim square once a piece is selected.

@@ -7,8 +7,10 @@ import {
   isLegalMove,
   legalCellsForTile,
   legalMoves,
+  pickPracticeMove,
   placedCount,
   type GameState,
+  type PracticeDifficulty,
 } from '../engine/game';
 import { distinctRotations } from '../engine/rules';
 import { tileById, tileIdsFor } from '../engine/tiles';
@@ -65,6 +67,7 @@ interface UiState {
   showQuickStart: boolean;
   joinCode: string;
   view: ViewMode;
+  practiceDifficulty: PracticeDifficulty;
 }
 
 interface Session {
@@ -81,6 +84,11 @@ interface Session {
 
 const PLAYER_NAMES: Record<Player, string> = { light: 'Light', dark: 'Dark' };
 const VIEW_NAMES: Record<ViewMode, string> = { tabletop: 'Tabletop', upright: 'Upright' };
+const PRACTICE_DIFFICULTY_NAMES: Record<PracticeDifficulty, string> = {
+  easy: 'Easy',
+  medium: 'Medium',
+  hard: 'Hard',
+};
 const VIEW_STORAGE_KEY = 'quads.view';
 const QUICK_START_STORAGE_KEY = 'quads.quickstart.v1';
 const SAVE_STORAGE_KEY = 'quads.save.v1';
@@ -175,6 +183,7 @@ export function mountGame(
     showQuickStart: !loadQuickStartSeen(),
     joinCode: '',
     view: options.view ?? loadViewMode(),
+    practiceDifficulty: 'medium',
   };
   if (options.view) saveViewMode(options.view);
 
@@ -490,6 +499,7 @@ export function mountGame(
   function notYourTurnMessage(): string {
     const s = state();
     if (s.phase === 'finished') return 'The game is over.';
+    if (session.mode === 'practice') return 'Dark is making the practice move.';
     return `It is ${PLAYER_NAMES[s.turn]}'s turn on the other screen.`;
   }
 
@@ -597,6 +607,9 @@ export function mountGame(
       ui.message = `${PLAYER_NAMES[next.turn]} has no legal move. ${PLAYER_NAMES[next.winner as Player]} wins.`;
     } else if (next.phase === 'opening') {
       ui.message = 'Dark places the other neutral piece, but not next to the first one.';
+      if (session.mode === 'practice' && next.turn === 'dark') {
+        window.setTimeout(() => playPracticeTurn(), 120);
+      }
     } else if (session.mode === 'remote') {
       ui.message = `Waiting for ${PLAYER_NAMES[opponentOf(session.seat)]} to move.`;
     } else {
@@ -607,6 +620,10 @@ export function mountGame(
     persist();
     broadcast();
     render();
+
+    if (session.mode === 'practice' && next.phase === 'playing' && next.turn === 'dark') {
+      window.setTimeout(() => playPracticeTurn(), 120);
+    }
   }
 
   function cancel(): void {
@@ -648,11 +665,71 @@ export function mountGame(
       selected: null,
       pending: null,
       rotation: 0,
-      message: 'New game. Light opens by placing a neutral piece anywhere on the board.',
+      message: session.mode === 'practice'
+        ? `New practice game. Light opens by placing a neutral piece anywhere on the board.`
+        : 'New game. Light opens by placing a neutral piece anywhere on the board.',
     };
     autoSelect();
     persist();
     broadcast();
+    render();
+  }
+
+  function playPracticeTurn(): void {
+    const current = state();
+    if (session.mode !== 'practice' || current.phase === 'finished' || current.turn !== 'dark') return;
+    const practiceMove = pickPracticeMove(current, ui.practiceDifficulty);
+    if (!practiceMove) {
+      const next = current;
+      if (next.phase === 'finished') return;
+      return;
+    }
+    const next = applyMove(current, practiceMove);
+    states = [...states, next];
+    ui.selected = null;
+    ui.pending = null;
+    ui.rotation = 0;
+    if (next.phase === 'finished') {
+      ui.message = `${PLAYER_NAMES[next.turn]} has no legal move. ${PLAYER_NAMES[next.winner as Player]} wins.`;
+    } else if (next.phase === 'opening') {
+      ui.message = 'Dark places the other neutral piece, but not next to the first one.';
+    } else {
+      const count = legalMoves(next).length;
+      ui.message = `${PLAYER_NAMES[next.turn]} to play. ${count} legal move${count === 1 ? '' : 's'} available.`;
+    }
+    autoSelect();
+    persist();
+    render();
+  }
+
+  function setGameMode(mode: PlayMode): void {
+    if (session.mode === 'remote') {
+      ui.message = 'Practice mode is only available in a one-screen game.';
+      render();
+      return;
+    }
+
+    if (mode === 'practice') {
+      session.mode = 'practice';
+      session.seat = 'light';
+      ui.message = `Practice mode on. Dark is playing ${PRACTICE_DIFFICULTY_NAMES[ui.practiceDifficulty]} difficulty.`;
+      newGame();
+      return;
+    }
+
+    session.mode = 'hotseat';
+    session.seat = 'light';
+    ui.message = 'Two-player mode on. Pass the device to the next player.';
+    newGame();
+  }
+
+  function setPracticeDifficulty(difficulty: PracticeDifficulty): void {
+    ui.practiceDifficulty = difficulty;
+    if (session.mode === 'practice') {
+      ui.message = `Practice difficulty set to ${PRACTICE_DIFFICULTY_NAMES[difficulty]}. Starting a fresh practice game.`;
+      newGame();
+      return;
+    }
     render();
   }
 
@@ -791,6 +868,7 @@ export function mountGame(
       <div class="dialog" role="dialog" aria-label="Rules and settings">
         <h2>How to play</h2>
         <p class="note">Light opens with a neutral piece anywhere on the board. Dark then places the other neutral piece, but not next to the first one.</p>
+        <p class="note">Use Practice from the toolbar for a solo game: you play as Light, while Dark can be set to Easy, Medium, or Hard.</p>
         <ul>
           <li>Place one of your own pieces each turn so it touches at least one piece already on the board.</li>
           <li>Every pair of touching sides must match: the same color meets the same color, and the same line style meets the same line style.</li>
@@ -835,7 +913,7 @@ export function mountGame(
 
   function shareMarkup(): string {
     if (!ui.showShare) return '';
-    if (session.mode === 'hotseat') {
+    if (session.mode !== 'remote') {
       return `
         <div class="dialog" role="dialog" aria-label="Play on two screens">
           <h2>Play on two screens</h2>
@@ -904,6 +982,19 @@ export function mountGame(
     const viewButton = remote
       ? ''
       : `<button type="button" class="btn" data-action="view" title="Switch between a flat tabletop layout and an upright screen layout">View: ${VIEW_NAMES[ui.view]}</button>`;
+    const modeButtons = remote
+      ? ''
+      : `<div class="segment segment--inline" role="group" aria-label="Game mode">
+          <button type="button" class="btn${session.mode === 'hotseat' ? ' is-on' : ''}" data-action="mode-hotseat" aria-pressed="${session.mode === 'hotseat'}">Two players</button>
+          <button type="button" class="btn${session.mode === 'practice' ? ' is-on' : ''}" data-action="mode-practice" aria-pressed="${session.mode === 'practice'}">Practice</button>
+        </div>`;
+    const difficultyButtons = remote || session.mode !== 'practice'
+      ? ''
+      : `<div class="segment segment--inline" role="group" aria-label="Practice difficulty">
+          <button type="button" class="btn${ui.practiceDifficulty === 'easy' ? ' is-on' : ''}" data-action="practice-easy" aria-pressed="${ui.practiceDifficulty === 'easy'}">Easy</button>
+          <button type="button" class="btn${ui.practiceDifficulty === 'medium' ? ' is-on' : ''}" data-action="practice-medium" aria-pressed="${ui.practiceDifficulty === 'medium'}">Medium</button>
+          <button type="button" class="btn${ui.practiceDifficulty === 'hard' ? ' is-on' : ''}" data-action="practice-hard" aria-pressed="${ui.practiceDifficulty === 'hard'}">Hard</button>
+        </div>`;
     const pill = remote
       ? `<span class="pill pill--${session.status}">${STATUS_LABELS[session.status]}</span>`
       : '';
@@ -913,6 +1004,8 @@ export function mountGame(
         <button type="button" class="btn" data-action="new">New game</button>
         <button type="button" class="btn" data-action="hints" aria-pressed="${ui.hints}">Hints ${ui.hints ? 'on' : 'off'}</button>
         ${viewButton}
+        ${modeButtons}
+        ${difficultyButtons}
         <button type="button" class="btn" data-action="share">${remote ? `Game ${session.gameId}` : 'Two screens'}</button>
         <button type="button" class="btn" data-action="rules">Rules</button>
         ${pill}
@@ -1095,6 +1188,21 @@ export function mountGame(
           return;
         case 'edge':
           toggleEdgeRule();
+          return;
+        case 'mode-hotseat':
+          setGameMode('hotseat');
+          return;
+        case 'mode-practice':
+          setGameMode('practice');
+          return;
+        case 'practice-easy':
+          setPracticeDifficulty('easy');
+          return;
+        case 'practice-medium':
+          setPracticeDifficulty('medium');
+          return;
+        case 'practice-hard':
+          setPracticeDifficulty('hard');
           return;
         case 'share':
           ui.showShare = !ui.showShare;
