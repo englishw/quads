@@ -123,11 +123,13 @@ function parseOptions(value: unknown): GameOptions | null {
   if (typeof value !== 'object' || value === null) return null;
   const raw = value as Record<string, unknown>;
   if (typeof raw.blockDiagonalOpening !== 'boolean') return null;
+  if (typeof raw.requireBoardEdgeMatch !== 'boolean') return null;
   if (typeof raw.shuffleTrays !== 'boolean') return null;
   if (typeof raw.seed !== 'number' || !Number.isFinite(raw.seed)) return null;
   return {
     ...DEFAULT_OPTIONS,
     blockDiagonalOpening: raw.blockDiagonalOpening,
+    requireBoardEdgeMatch: raw.requireBoardEdgeMatch,
     shuffleTrays: raw.shuffleTrays,
     seed: raw.seed,
   };
@@ -204,7 +206,8 @@ function optionsEqual(a: GameOptions, b: GameOptions): boolean {
   return (
     a.seed === b.seed &&
     a.shuffleTrays === b.shuffleTrays &&
-    a.blockDiagonalOpening === b.blockDiagonalOpening
+    a.blockDiagonalOpening === b.blockDiagonalOpening &&
+    a.requireBoardEdgeMatch === b.requireBoardEdgeMatch
   );
 }
 

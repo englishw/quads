@@ -44,8 +44,8 @@ function frameMarkup(): string {
     // Top and bottom bands carry lines across the board edge; sides carry lines along it.
     `<rect x="${near}" y="${near}" width="${span}" height="${BAND}" fill="url(#qv-${SUFFIX})"/>`,
     `<rect x="${near}" y="${far}" width="${span}" height="${BAND}" fill="url(#qv-${SUFFIX})"/>`,
-    `<rect x="${near}" y="${near}" width="${BAND}" height="${span}" fill="url(#qh-${SUFFIX})"/>`,
-    `<rect x="${far}" y="${near}" width="${BAND}" height="${span}" fill="url(#qh-${SUFFIX})"/>`,
+    `<rect x="${near}" y="${near}" width="${BAND}" height="${span}" fill="url(#qv-${SUFFIX})"/>`,
+    `<rect x="${far}" y="${near}" width="${BAND}" height="${span}" fill="url(#qv-${SUFFIX})"/>`,
   ].join('');
   const surface = `<rect x="0" y="0" width="${BOARD_PX}" height="${BOARD_PX}" fill="#efecd6"/>`;
   return `<g class="board-frame">${outer}${bands}${surface}</g>`;

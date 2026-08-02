@@ -98,6 +98,13 @@ describe('opening', () => {
     expect(isLegalMove(afterFirst, 16, second, 0).ok).toBe(true);
   });
 
+  it('forces starter pieces to respect the board edge when that option is enabled', () => {
+    const state = createGame({ shuffleTrays: false, seed: 7, requireBoardEdgeMatch: true });
+    const neutral = state.neutralQueue[0];
+    expect(isLegalMove(state, 0, neutral, 0).ok).toBe(false);
+    expect(isLegalMove(state, 13, neutral, 0).ok).toBe(true);
+  });
+
   it('hands the turn back to light once both neutral pieces are down', () => {
     const state = openGame(fresh(), 14, 16);
     expect(state.phase).toBe('playing');

@@ -20,6 +20,8 @@ export type Phase = 'opening' | 'playing' | 'finished';
 export interface GameOptions {
   /** Also forbid diagonal touching for the second neutral piece. */
   blockDiagonalOpening: boolean;
+  /** Require border-facing sides to match the board edge style. */
+  requireBoardEdgeMatch: boolean;
   /** Shuffle the order pieces appear in each tray. */
   shuffleTrays: boolean;
   seed: number;
@@ -45,6 +47,7 @@ export interface GameState {
 
 export const DEFAULT_OPTIONS: GameOptions = {
   blockDiagonalOpening: false,
+  requireBoardEdgeMatch: false,
   shuffleTrays: true,
   seed: 1,
 };
@@ -124,7 +127,12 @@ export function isLegalMove(
   const sides = tileById(tileId).sides;
 
   if (state.phase === 'opening') {
-    if (state.board[index]) return { ok: false, reason: 'That cell is already taken.' };
+    const edgeCheck = checkPlacement(state.board as Board, sides, index, rotation, {
+      requireAdjacency: false,
+      requireBoardEdgeMatch: state.options.requireBoardEdgeMatch,
+    });
+    if (!edgeCheck.ok) return edgeCheck;
+
     const placedCount = state.board.filter((c) => c !== null).length;
     if (placedCount > 0) {
       const blocked = touchingIndices(index, state.options.blockDiagonalOpening).some(
@@ -140,7 +148,10 @@ export function isLegalMove(
     return { ok: true };
   }
 
-  return checkPlacement(state.board as Board, sides, index, rotation, { requireAdjacency: true });
+  return checkPlacement(state.board as Board, sides, index, rotation, {
+    requireAdjacency: true,
+    requireBoardEdgeMatch: state.options.requireBoardEdgeMatch,
+  });
 }
 
 /** Every legal move for the player to move. */

@@ -121,4 +121,21 @@ describe('placement', () => {
     expect(checkPlacement(board, ['L', 'X', 'L', 'P'], 14, 0).ok).toBe(false);
     expect(tileById(west!.id).sides[1]).toBe('P');
   });
+
+  it('can require border-facing sides to match the board edge', () => {
+    const board = emptyBoard();
+    expect(
+      checkPlacement(board, ['X', 'L', 'L', 'P'], 0, 0, {
+        requireAdjacency: false,
+        requireBoardEdgeMatch: true,
+      }).ok,
+    ).toBe(true);
+
+    const result = checkPlacement(board, ['P', 'L', 'L', 'P'], 0, 0, {
+      requireAdjacency: false,
+      requireBoardEdgeMatch: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('board edge');
+  });
 });

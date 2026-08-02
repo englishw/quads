@@ -336,6 +336,7 @@ export function mountGame(
   function startShared(): void {
     session.peer?.leave();
     const blockDiagonalOpening = state().options.blockDiagonalOpening;
+    const requireBoardEdgeMatch = state().options.requireBoardEdgeMatch;
     session = {
       ...session,
       mode: 'remote',
@@ -347,7 +348,7 @@ export function mountGame(
       detail: '',
       opponentSeat: null,
     };
-    states = [createGame({ seed: Date.now() % 100000, blockDiagonalOpening })];
+    states = [createGame({ seed: Date.now() % 100000, blockDiagonalOpening, requireBoardEdgeMatch })];
     ui = { ...ui, selected: null, pending: null, rotation: 0, showShare: true, showRules: false };
     ui.message = `Shared game ${session.gameId} created. Send the link to the other player.`;
     autoSelect();
@@ -663,6 +664,20 @@ export function mountGame(
     render();
   }
 
+  function toggleEdgeRule(): void {
+    const current = state();
+    if (current.history.length > 0) {
+      ui.message = 'Board-edge rule changes take effect on the next new game.';
+    }
+    const next: GameState = {
+      ...current,
+      options: { ...current.options, requireBoardEdgeMatch: !current.options.requireBoardEdgeMatch },
+    };
+    states = [...states.slice(0, -1), next];
+    persist();
+    render();
+  }
+
   // --- markup ---------------------------------------------------------------
 
   function panelMarkup(player: Player): string {
@@ -745,9 +760,10 @@ export function mountGame(
       <div class="dialog" role="dialog" aria-label="Rules and settings">
         <h2>How to play</h2>
         <ul>
-          <li>Light opens with a neutral piece anywhere. Dark then places the other neutral piece, but not next to the first.</li>
+          <li>Light opens with a neutral piece anywhere that still satisfies the current edge option. Dark then places the other neutral piece, but not next to the first.</li>
           <li>After that, each turn place one of your own pieces so it touches at least one piece already on the board.</li>
           <li>Every pair of touching sides must be identical: light to light, dark to dark, lines along the edge to lines along the edge, lines across the edge to lines across the edge.</li>
+          <li>When the board-edge option is enabled, border-facing sides must match the frame: top and bottom edges expect the crossing style, while the left and right edges expect the parallel style.</li>
           <li>You may touch your opponent's pieces and several pieces at once.</li>
           <li>If the player to move has no legal placement, the other player wins.</li>
         </ul>
@@ -757,6 +773,10 @@ export function mountGame(
         <label class="check">
           <input type="checkbox" data-action="diagonal" ${s.options.blockDiagonalOpening ? 'checked' : ''}/>
           Opening: the second neutral piece may not touch diagonally either
+        </label>
+        <label class="check">
+          <input type="checkbox" data-action="edge" ${s.options.requireBoardEdgeMatch ? 'checked' : ''}/>
+          Board edge: border-facing sides must match the board edge style
         </label>
         <button type="button" class="btn" data-action="rules">Close</button>
       </div>`;
@@ -1017,6 +1037,9 @@ export function mountGame(
           return;
         case 'diagonal':
           toggleDiagonalRule();
+          return;
+        case 'edge':
+          toggleEdgeRule();
           return;
         case 'share':
           ui.showShare = !ui.showShare;

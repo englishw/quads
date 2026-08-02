@@ -103,16 +103,29 @@ export function checkPlacement(
   sides: Sides,
   index: number,
   rotation: Rotation,
-  options: { requireAdjacency?: boolean } = {},
+  options: { requireAdjacency?: boolean; requireBoardEdgeMatch?: boolean } = {},
 ): PlacementCheck {
   const requireAdjacency = options.requireAdjacency ?? true;
+  const requireBoardEdgeMatch = options.requireBoardEdgeMatch ?? false;
   if (index < 0 || index >= board.length) return { ok: false, reason: 'That cell is off the board.' };
   if (board[index]) return { ok: false, reason: 'That cell is already taken.' };
 
   let neighbours = 0;
   for (const dir of DIRECTIONS) {
     const ni = neighbourIndex(index, dir);
-    if (ni === null) continue;
+    if (ni === null) {
+      if (requireBoardEdgeMatch) {
+        const mine = sideAt(sides, rotation, dir);
+        const expected = dir === 0 || dir === 2 ? 'X' : 'P';
+        if (mine !== expected) {
+          return {
+            ok: false,
+            reason: `The ${DIRECTION_NAMES[dir]} side does not match the board edge: ${SIDE_LABEL_NAMES[mine]} instead of ${SIDE_LABEL_NAMES[expected]}.`,
+          };
+        }
+      }
+      continue;
+    }
     const placed = board[ni];
     if (!placed) continue;
     neighbours += 1;
