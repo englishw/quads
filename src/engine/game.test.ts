@@ -7,6 +7,7 @@ import {
   isLegalMove,
   legalCellsForTile,
   legalMoves,
+  pickPracticeMove,
   placedCount,
   type GameState,
 } from './game';
@@ -171,6 +172,55 @@ describe('end of the game', () => {
     expect(finished.winner).toBe('dark');
     expect(hasLegalMove(finished)).toBe(false);
     expect(legalMoves(finished)).toHaveLength(0);
+  });
+});
+
+describe('practice AI', () => {
+  it('hard always chooses the move that leaves the player with the fewest replies', () => {
+    const state = openGame(fresh(), 14, 16);
+    const move = pickPracticeMove(state, 'hard', () => 0);
+    expect(move).not.toBeNull();
+    if (!move) return;
+    const replies = legalMoves(applyMove(state, move)).length;
+    const best = legalMoves(state)
+      .map((candidate) => ({ candidate, replies: legalMoves(applyMove(state, candidate)).length }))
+      .reduce((bestSoFar, item) => (item.replies < bestSoFar.replies ? item : bestSoFar), {
+        candidate: legalMoves(state)[0],
+        replies: Number.POSITIVE_INFINITY,
+      });
+    expect(replies).toBe(best.replies);
+  });
+
+  it('easy prefers the move that leaves the player with the most replies', () => {
+    const state = openGame(fresh(), 14, 16);
+    const move = pickPracticeMove(state, 'easy', () => 0);
+    expect(move).not.toBeNull();
+    if (!move) return;
+    const replies = legalMoves(applyMove(state, move)).length;
+    const worst = legalMoves(state)
+      .map((candidate) => ({ candidate, replies: legalMoves(applyMove(state, candidate)).length }))
+      .reduce((worstSoFar, item) => (item.replies > worstSoFar.replies ? item : worstSoFar), {
+        candidate: legalMoves(state)[0],
+        replies: Number.NEGATIVE_INFINITY,
+      });
+    expect(replies).toBe(worst.replies);
+  });
+
+  it('medium chooses a mid-ranked move instead of the obvious best or worst choice', () => {
+    const state = openGame(fresh(), 14, 16);
+    const scores = legalMoves(state)
+      .map((candidate) => ({ candidate, replies: legalMoves(applyMove(state, candidate)).length }))
+      .sort((a, b) => a.replies - b.replies || a.candidate.tileId.localeCompare(b.candidate.tileId));
+    const middle = Math.floor(scores.length / 2);
+    const windowSize = Math.max(1, Math.ceil(scores.length / 3));
+    const start = Math.max(0, middle - Math.floor(windowSize / 2));
+    const end = Math.min(scores.length, start + windowSize);
+    const pool = scores.slice(start, end);
+    const move = pickPracticeMove(state, 'medium', () => 0.5);
+    expect(move).not.toBeNull();
+    if (!move) return;
+    const replies = legalMoves(applyMove(state, move)).length;
+    expect(pool.some((item) => item.replies === replies)).toBe(true);
   });
 });
 

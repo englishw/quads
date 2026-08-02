@@ -3,8 +3,8 @@ import type { Player, Rotation } from '../engine/types';
 
 export const SNAPSHOT_VERSION = 1;
 
-/** 'hotseat' is both players on one screen, 'remote' is one player per screen. */
-export type PlayMode = 'hotseat' | 'remote';
+/** 'hotseat' is both players on one screen, 'remote' is one player per screen, and 'practice' is a one-screen human-vs-AI mode. */
+export type PlayMode = 'hotseat' | 'remote' | 'practice';
 
 /** A move in its compact stored form. */
 export interface SavedMove {
@@ -158,7 +158,7 @@ export function parseSnapshot(value: unknown): Snapshot | null {
   const gameId = typeof raw.gameId === 'string' ? normalizeGameId(raw.gameId) : '';
   if (!isValidGameId(gameId)) return null;
   if (typeof raw.epoch !== 'number' || !Number.isInteger(raw.epoch) || raw.epoch < 0) return null;
-  if (raw.mode !== 'hotseat' && raw.mode !== 'remote') return null;
+  if (raw.mode !== 'hotseat' && raw.mode !== 'remote' && raw.mode !== 'practice') return null;
   if (!isPlayer(raw.seat)) return null;
   const options = parseOptions(raw.options);
   if (!options) return null;

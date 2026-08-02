@@ -14,7 +14,9 @@ export function opponentOf(player: Player): Player {
 
 /** On one screen you move for both players; on two screens only for your own seat. */
 export function controlsSeat(info: SeatInfo, player: Player): boolean {
-  return info.mode === 'hotseat' || info.seat === player;
+  if (info.mode === 'hotseat') return true;
+  if (info.mode === 'practice') return player === 'light';
+  return info.seat === player;
 }
 
 export function canPlayTurn(state: GameState, info: SeatInfo): boolean {
@@ -32,7 +34,7 @@ export function isTrayHidden(info: SeatInfo, player: Player): boolean {
 
 /** Undo stays on one screen, where both players can agree to it face to face. */
 export function canUndo(info: SeatInfo, historyLength: number): boolean {
-  return info.mode === 'hotseat' && historyLength > 1;
+  return (info.mode === 'hotseat' || info.mode === 'practice') && historyLength > 1;
 }
 
 /** The panel nearest the player holding the device. */

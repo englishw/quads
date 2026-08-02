@@ -16,6 +16,7 @@ import {
 } from './rules';
 
 export type Phase = 'opening' | 'playing' | 'finished';
+export type PracticeDifficulty = 'easy' | 'medium' | 'hard';
 
 export interface GameOptions {
   /** Also forbid diagonal touching for the second neutral piece. */
@@ -172,6 +173,39 @@ export function legalMoves(state: GameState): Move[] {
     }
   }
   return out;
+}
+
+/** Pick a move for the single-player practice opponent. */
+export function pickPracticeMove(
+  state: GameState,
+  difficulty: PracticeDifficulty = 'easy',
+  rng: () => number = Math.random,
+): Move | null {
+  const options = legalMoves(state);
+  if (options.length === 0) return null;
+
+  const scored = options.map((move) => ({
+    move,
+    replies: legalMoves(applyMove(state, move)).length,
+  }));
+
+  if (difficulty === 'hard') {
+    return scored.reduce((best, current) => (current.replies < best.replies ? current : best)).move;
+  }
+
+  if (difficulty === 'easy') {
+    return scored.reduce((best, current) => (current.replies > best.replies ? current : best)).move;
+  }
+
+  const ranked = scored
+    .slice()
+    .sort((a, b) => a.replies - b.replies || a.move.tileId.localeCompare(b.move.tileId));
+  const middle = Math.floor(ranked.length / 2);
+  const windowSize = Math.max(1, Math.ceil(ranked.length / 3));
+  const start = Math.max(0, middle - Math.floor(windowSize / 2));
+  const end = Math.min(ranked.length, start + windowSize);
+  const pool = ranked.slice(start, end);
+  return pool[Math.floor(rng() * pool.length)].move;
 }
 
 export function hasLegalMove(state: GameState): boolean {
