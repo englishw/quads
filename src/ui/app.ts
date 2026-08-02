@@ -11,7 +11,7 @@ import {
   type GameState,
 } from '../engine/game';
 import { distinctRotations } from '../engine/rules';
-import { tileById } from '../engine/tiles';
+import { tileById, tileIdsFor } from '../engine/tiles';
 import { boardSvg, type Ghost } from '../render/board';
 import { tileSvg } from '../render/tile';
 import {
@@ -62,6 +62,7 @@ interface UiState {
   message: string;
   showRules: boolean;
   showShare: boolean;
+  showQuickStart: boolean;
   joinCode: string;
   view: ViewMode;
 }
@@ -81,6 +82,7 @@ interface Session {
 const PLAYER_NAMES: Record<Player, string> = { light: 'Light', dark: 'Dark' };
 const VIEW_NAMES: Record<ViewMode, string> = { tabletop: 'Tabletop', upright: 'Upright' };
 const VIEW_STORAGE_KEY = 'quads.view';
+const QUICK_START_STORAGE_KEY = 'quads.quickstart.v1';
 const SAVE_STORAGE_KEY = 'quads.save.v1';
 
 const STATUS_LABELS: Record<RelayStatus, string> = {
@@ -103,6 +105,22 @@ function loadViewMode(): ViewMode {
 function saveViewMode(view: ViewMode): void {
   try {
     localStorage.setItem(VIEW_STORAGE_KEY, view);
+  } catch {
+    // Not being able to remember the choice is not worth interrupting the game.
+  }
+}
+
+function loadQuickStartSeen(): boolean {
+  try {
+    return localStorage.getItem(QUICK_START_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveQuickStartSeen(): void {
+  try {
+    localStorage.setItem(QUICK_START_STORAGE_KEY, 'true');
   } catch {
     // Not being able to remember the choice is not worth interrupting the game.
   }
@@ -154,6 +172,7 @@ export function mountGame(
     message: 'Light opens by placing a neutral piece anywhere on the board.',
     showRules: false,
     showShare: false,
+    showQuickStart: !loadQuickStartSeen(),
     joinCode: '',
     view: options.view ?? loadViewMode(),
   };
@@ -670,6 +689,12 @@ export function mountGame(
     render();
   }
 
+  function closeQuickStart(): void {
+    ui.showQuickStart = false;
+    saveQuickStartSeen();
+    render();
+  }
+
   function toggleEdgeRule(): void {
     const current = state();
     if (current.history.length > 0) {
@@ -762,8 +787,17 @@ export function mountGame(
           <button type="button" class="btn${ui.view === 'tabletop' ? ' is-on' : ''}" data-action="view-tabletop" aria-pressed="${ui.view === 'tabletop'}">Tabletop &mdash; device lies flat, Dark's tray is upside down</button>
           <button type="button" class="btn${ui.view === 'upright' ? ' is-on' : ''}" data-action="view-upright" aria-pressed="${ui.view === 'upright'}">Upright &mdash; screen stands up, both players take turns the same way up</button>
         </div>`;
+    const neutralPreview = tileIdsFor('neutral')
+      .map((tileId) => `
+        <div class="quick-start__preview">
+          ${tileSvg(tileById(tileId).sides, 0, { className: 'quick-start-svg' })}
+        </div>`)
+      .join('');
     return `
       <div class="dialog" role="dialog" aria-label="Rules and settings">
+        <h2>Quick start</h2>
+        <p class="note">Light opens by placing the first neutral piece anywhere on the board. Dark then places the second neutral piece, but not next to the first.</p>
+        <div class="quick-start__previews" aria-hidden="true">${neutralPreview}</div>
         <h2>How to play</h2>
         <ul>
           <li>Light opens with a neutral piece anywhere that still satisfies the current edge option. Dark then places the other neutral piece, but not next to the first.</li>
@@ -785,6 +819,27 @@ export function mountGame(
           Board edge: border-facing sides must match the board edge style
         </label>
         <button type="button" class="btn" data-action="rules">Close</button>
+      </div>`;
+  }
+
+  function quickStartMarkup(): string {
+    if (!ui.showQuickStart) return '';
+    return `
+      <div class="quick-start" role="dialog" aria-label="Quick start">
+        <div class="quick-start__card">
+          <h2>Quick start</h2>
+          <p class="note">Light opens with a neutral piece anywhere on the board. Dark then places the other neutral piece, but not next to the first one.</p>
+          <p class="note">After that, place one of your own pieces so it touches at least one piece already on the board, and make every touching side match.</p>
+          <div class="quick-start__previews" aria-hidden="true">
+            ${tileIdsFor('neutral')
+              .map((tileId) => `
+                <div class="quick-start__preview">
+                  ${tileSvg(tileById(tileId).sides, 0, { className: 'quick-start-svg' })}
+                </div>`)
+              .join('')}
+          </div>
+          <button type="button" class="btn btn--primary" data-action="quickstart-close">Start playing</button>
+        </div>
       </div>`;
   }
 
@@ -891,6 +946,7 @@ export function mountGame(
           <div class="board-wrap">${boardSvg(s, view)}</div>
           <p class="status" role="status" aria-live="polite">${statusLine()}</p>
           ${toolbarMarkup()}
+          ${quickStartMarkup()}
           ${rulesMarkup()}
           ${shareMarkup()}
           ${resultMarkup()}
@@ -1031,6 +1087,9 @@ export function mountGame(
           ui.showRules = !ui.showRules;
           if (ui.showRules) ui.showShare = false;
           render();
+          return;
+        case 'quickstart-close':
+          closeQuickStart();
           return;
         case 'view':
           toggleViewMode();
