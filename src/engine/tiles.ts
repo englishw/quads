@@ -92,8 +92,20 @@ export function tileById(id: string): TileDef {
   return tile;
 }
 
+function countOwnColourSides(sides: Sides, colour: 'L' | 'D'): number {
+  return sides.filter((side) => side === colour).length;
+}
+
 export function tileIdsFor(owner: Owner): string[] {
-  return TILES.filter((t) => t.owner === owner).map((t) => t.id);
+  const colour = owner === 'light' ? 'L' : 'D';
+  return TILES.filter((t) => t.owner === owner)
+    .map((t) => t.id)
+    .sort((a, b) => {
+      const aCount = countOwnColourSides(tileById(a).sides, colour);
+      const bCount = countOwnColourSides(tileById(b).sides, colour);
+      if (aCount !== bCount) return aCount - bCount;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
 }
 
 export function sidesKey(sides: Sides): string {

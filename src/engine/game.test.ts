@@ -53,6 +53,12 @@ describe('setup', () => {
     const all = [...state.hands.light, ...state.hands.dark, ...state.neutralQueue].sort();
     expect(all).toEqual(TILES.map((t) => t.id).sort());
   });
+
+  it('keeps the default player trays in stable side-count order', () => {
+    const state = createGame();
+    expect(state.hands.light).toEqual(tileIdsFor('light'));
+    expect(state.hands.dark).toEqual(tileIdsFor('dark'));
+  });
 });
 
 describe('opening', () => {

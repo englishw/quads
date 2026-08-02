@@ -48,7 +48,7 @@ export interface GameState {
 export const DEFAULT_OPTIONS: GameOptions = {
   blockDiagonalOpening: false,
   requireBoardEdgeMatch: false,
-  shuffleTrays: true,
+  shuffleTrays: false,
   seed: 1,
 };
 

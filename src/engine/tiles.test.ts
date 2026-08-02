@@ -36,6 +36,32 @@ describe('piece set', () => {
     expect(neutral.sort()).toEqual(['PPPP', 'XXXX']);
   });
 
+  it('orders each player tray by increasing count of their own colour sides', () => {
+    const light = tileIdsFor('light');
+    const dark = tileIdsFor('dark');
+
+    const countOwnColour = (id: string, owner: 'light' | 'dark'): number => {
+      const tile = TILES.find((entry) => entry.id === id);
+      expect(tile).toBeDefined();
+      const colour = owner === 'light' ? 'L' : 'D';
+      return tile!.sides.filter((side) => side === colour).length;
+    };
+
+    expect(light).toEqual(
+      [...light].sort((a, b) => countOwnColour(a, 'light') - countOwnColour(b, 'light')),
+    );
+    expect(dark).toEqual(
+      [...dark].sort((a, b) => countOwnColour(a, 'dark') - countOwnColour(b, 'dark')),
+    );
+
+    expect(light.map((id) => countOwnColour(id, 'light'))).toEqual(
+      [...light.map((id) => countOwnColour(id, 'light'))].sort((a, b) => a - b),
+    );
+    expect(dark.map((id) => countOwnColour(id, 'dark'))).toEqual(
+      [...dark.map((id) => countOwnColour(id, 'dark'))].sort((a, b) => a - b),
+    );
+  });
+
   it('uses unique ids', () => {
     expect(new Set(TILES.map((t) => t.id)).size).toBe(TILES.length);
   });
