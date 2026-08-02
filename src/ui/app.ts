@@ -787,24 +787,13 @@ export function mountGame(
           <button type="button" class="btn${ui.view === 'tabletop' ? ' is-on' : ''}" data-action="view-tabletop" aria-pressed="${ui.view === 'tabletop'}">Tabletop &mdash; device lies flat, Dark's tray is upside down</button>
           <button type="button" class="btn${ui.view === 'upright' ? ' is-on' : ''}" data-action="view-upright" aria-pressed="${ui.view === 'upright'}">Upright &mdash; screen stands up, both players take turns the same way up</button>
         </div>`;
-    const neutralPreview = tileIdsFor('neutral')
-      .map((tileId) => `
-        <div class="quick-start__preview">
-          ${tileSvg(tileById(tileId).sides, 0, { className: 'quick-start-svg' })}
-        </div>`)
-      .join('');
     return `
       <div class="dialog" role="dialog" aria-label="Rules and settings">
-        <h2>Quick start</h2>
-        <p class="note">Light opens by placing the first neutral piece anywhere on the board. Dark then places the second neutral piece, but not next to the first.</p>
-        <div class="quick-start__previews" aria-hidden="true">${neutralPreview}</div>
         <h2>How to play</h2>
         <ul>
-          <li>Light opens with a neutral piece anywhere that still satisfies the current edge option. Dark then places the other neutral piece, but not next to the first.</li>
-          <li>After that, each turn place one of your own pieces so it touches at least one piece already on the board.</li>
-          <li>Every pair of touching sides must be identical: light to light, dark to dark, lines along the edge to lines along the edge, lines across the edge to lines across the edge.</li>
-          <li>When the board-edge option is enabled, border-facing sides must match the frame: top and bottom edges expect the crossing style, while the left and right edges expect the parallel style.</li>
-          <li>You may touch your opponent's pieces and several pieces at once.</li>
+          <li>Place one of your own pieces each turn so it touches at least one piece already on the board.</li>
+          <li>Every pair of touching sides must match: the same color meets the same color, and the same line style meets the same line style.</li>
+          <li>You can touch your opponent's pieces and several pieces at once.</li>
           <li>If the player to move has no legal placement, the other player wins.</li>
         </ul>
         <h2>View</h2>
