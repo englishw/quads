@@ -130,6 +130,17 @@ body {
   margin-bottom: 12px;
 }
 
+.segment--inline {
+  width: 100%;
+  flex-direction: row;
+  align-items: stretch;
+  margin-bottom: 0;
+}
+
+.segment--inline .btn {
+  flex: 1 1 auto;
+}
+
 .segment .btn {
   min-height: 44px;
   padding: 6px 12px;
