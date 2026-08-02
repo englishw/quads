@@ -522,8 +522,14 @@ export function mountGame(
   }
 
   function rotate(): void {
+    const game = state();
+    if (game.phase === 'opening') {
+      ui.message = 'The opening neutral piece is fixed in its starting orientation.';
+      render();
+      return;
+    }
     if (!ui.selected) {
-      ui.message = canPlayTurn(state(), seatInfo())
+      ui.message = canPlayTurn(game, seatInfo())
         ? 'Choose one of your pieces first.'
         : notYourTurnMessage();
       render();
@@ -535,8 +541,8 @@ export function mountGame(
       render();
       return;
     }
-    const current = options.indexOf(ui.rotation);
-    ui.rotation = options[(current + 1) % options.length];
+    const currentIndex = options.indexOf(ui.rotation);
+    ui.rotation = options[(currentIndex + 1) % options.length];
     if (ui.pending !== null) {
       const check = isLegalMove(state(), ui.pending, ui.selected, ui.rotation);
       ui.message = check.ok ? 'This rotation fits. Press Place to confirm.' : check.reason;
@@ -728,7 +734,7 @@ export function mountGame(
         : 'Waiting';
     const controls = mine
       ? `<div class="panel__controls">
-          <button type="button" class="btn" data-action="rotate"${active ? '' : ' disabled'}>Rotate</button>
+          <button type="button" class="btn" data-action="rotate"${active && openingPiece === null ? '' : ' disabled'}>Rotate</button>
           <button type="button" class="btn btn--primary" data-action="place"${active && ghost()?.valid ? '' : ' disabled'}>Place</button>
           <button type="button" class="btn" data-action="cancel"${active && ui.pending !== null ? '' : ' disabled'}>Clear</button>
         </div>`
