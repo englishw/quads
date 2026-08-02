@@ -549,6 +549,67 @@ body {
   }
 }
 
+@media (orientation: landscape) and (max-width: 900px) {
+  .board-area {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      'board'
+      'status'
+      'toolbar';
+  }
+
+  .board-wrap {
+    grid-area: board;
+  }
+
+  .status {
+    grid-area: status;
+    text-align: center;
+  }
+
+  .toolbar {
+    grid-area: toolbar;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+
+  .toolbar .btn,
+  .segment--inline .btn {
+    min-height: 34px;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+}
+
+@media (orientation: portrait) and (max-width: 700px) {
+  .table {
+    gap: 4px;
+    padding: 4px;
+  }
+
+  .panel {
+    padding: 5px 6px;
+  }
+
+  .toolbar {
+    gap: 4px;
+  }
+
+  .toolbar .btn,
+  .segment--inline .btn {
+    min-height: 34px;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+
+  .status {
+    font-size: 12px;
+  }
+}
+
 /* In landscape the board is limited by height, so the status line and toolbar move
    beside it instead of stacking under it. */
 @media (orientation: landscape) and (min-width: 760px) {
