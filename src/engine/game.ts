@@ -1,4 +1,5 @@
 import {
+  DIRECTIONS,
   CELL_COUNT,
   type Owner,
   type PlacedTile,
@@ -10,6 +11,8 @@ import {
   ROTATIONS,
   checkPlacement,
   distinctRotations,
+  neighbourIndex,
+  sideAt,
   touchingIndices,
   type Board,
   type PlacementCheck,
@@ -175,6 +178,220 @@ export function legalMoves(state: GameState): Move[] {
   return out;
 }
 
+function randomIndex(length: number, rng: () => number): number {
+  return Math.min(length - 1, Math.floor(rng() * length));
+}
+
+function compareMoves(a: Move, b: Move): number {
+  return (
+    a.tileId.localeCompare(b.tileId) ||
+    a.index - b.index ||
+    a.rotation - b.rotation ||
+    a.by.localeCompare(b.by)
+  );
+}
+
+function scoreOpponentReplies(state: GameState, move: Move): number {
+  return legalMoves(applyMove(state, move)).length;
+}
+
+function legalMovesForTurn(state: GameState, turn: Player): number {
+  return legalMoves({ ...state, turn }).length;
+}
+
+function evaluateMobilityForDark(state: GameState): number {
+  const darkMoves = legalMovesForTurn(state, 'dark');
+  const lightMoves = legalMovesForTurn(state, 'light');
+  return darkMoves - lightMoves;
+}
+
+function simulateRandomPlayout(state: GameState, rng: () => number): Player | null {
+  let current = state;
+  while (current.phase !== 'finished') {
+    const moves = legalMoves(current);
+    if (moves.length === 0) {
+      return current.winner ?? other(current.turn);
+    }
+    const chosen = moves[randomIndex(moves.length, rng)];
+    current = applyMove(current, chosen);
+  }
+  return current.winner;
+}
+
+function countDarkSides(tileId: string): number {
+  return tileById(tileId).sides.filter((side) => side === 'D').length;
+}
+
+function countLightSides(tileId: string): number {
+  return tileById(tileId).sides.filter((side) => side === 'L').length;
+}
+
+function countDarkEdgeWaste(move: Move): number {
+  const sides = tileById(move.tileId).sides;
+  let wasted = 0;
+  for (const dir of DIRECTIONS) {
+    if (neighbourIndex(move.index, dir) !== null) continue;
+    if (sideAt(sides, move.rotation, dir) === 'D') wasted += 1;
+  }
+  return wasted;
+}
+
+function countLightEdgeWaste(move: Move): number {
+  const sides = tileById(move.tileId).sides;
+  let wasted = 0;
+  for (const dir of DIRECTIONS) {
+    if (neighbourIndex(move.index, dir) !== null) continue;
+    if (sideAt(sides, move.rotation, dir) === 'L') wasted += 1;
+  }
+  return wasted;
+}
+
+function reserveSideBalance(state: GameState): number {
+  const darkReserve = state.hands.dark.reduce((total, tileId) => total + countDarkSides(tileId), 0);
+  const lightReserve = state.hands.light.reduce(
+    (total, tileId) => total + tileById(tileId).sides.filter((side) => side === 'L').length,
+    0,
+  );
+  return darkReserve - lightReserve;
+}
+
+function staticEvalForDark(state: GameState): number {
+  if (state.phase === 'finished') {
+    if (state.winner === 'dark') return 1_000_000;
+    if (state.winner === 'light') return -1_000_000;
+    return 0;
+  }
+  const mobility = evaluateMobilityForDark(state);
+  const reserve = reserveSideBalance(state);
+  return mobility * 14 + reserve * 2;
+}
+
+function quickMoveScoreForDark(state: GameState, move: Move): number {
+  const next = applyMove(state, move);
+  const mobility = evaluateMobilityForDark(next);
+  const replies = legalMoves(next).length;
+  const edgePenalty = move.by === 'dark' ? countDarkEdgeWaste(move) : -countLightEdgeWaste(move);
+  return mobility * 8 - replies * 2 - edgePenalty * 10;
+}
+
+function searchOrderScore(state: GameState, move: Move): number {
+  if (state.turn === 'dark') {
+    return -countDarkEdgeWaste(move) * 8 - countDarkSides(move.tileId);
+  }
+  return -countLightEdgeWaste(move) * 8 - countLightSides(move.tileId);
+}
+
+function stateKey(state: GameState, depth: number): string {
+  const boardKey = state.board
+    .map((cell) => (cell ? `${cell.tileId}:${cell.rotation}` : '_'))
+    .join(',');
+  return [
+    state.turn,
+    state.phase,
+    depth.toString(),
+    boardKey,
+    state.hands.light.join('.'),
+    state.hands.dark.join('.'),
+    state.neutralQueue.join('.'),
+  ].join('|');
+}
+
+function hardSearchDepth(state: GameState): number {
+  const empties = CELL_COUNT - placedCount(state);
+  if (empties <= 8) return 5;
+  if (empties <= 14) return 4;
+  if (empties <= 22) return 3;
+  return 2;
+}
+
+function hardBranchLimit(state: GameState): number {
+  const empties = CELL_COUNT - placedCount(state);
+  if (empties <= 10) return 20;
+  if (empties <= 16) return 16;
+  if (empties <= 24) return 12;
+  return 10;
+}
+
+function orderedMovesForSearch(state: GameState): Move[] {
+  const limit = hardBranchLimit(state);
+  const ranked = legalMoves(state)
+    .map((move) => ({ move, score: searchOrderScore(state, move) }))
+    .sort((a, b) => {
+      if (state.turn === 'dark') {
+        return b.score - a.score || compareMoves(a.move, b.move);
+      }
+      return a.score - b.score || compareMoves(a.move, b.move);
+    });
+  return ranked.slice(0, limit).map((item) => item.move);
+}
+
+function minimaxForDark(
+  state: GameState,
+  depth: number,
+  alpha: number,
+  beta: number,
+  cache: Map<string, number>,
+): number {
+  if (state.phase === 'finished') {
+    const terminal = staticEvalForDark(state);
+    return terminal > 0 ? terminal + depth : terminal - depth;
+  }
+  if (depth === 0) return staticEvalForDark(state);
+
+  const key = stateKey(state, depth);
+  const cached = cache.get(key);
+  if (cached !== undefined) return cached;
+
+  const moves = orderedMovesForSearch(state);
+  if (moves.length === 0) return staticEvalForDark(state);
+
+  let best: number;
+  if (state.turn === 'dark') {
+    best = Number.NEGATIVE_INFINITY;
+    let localAlpha = alpha;
+    for (const move of moves) {
+      const score = minimaxForDark(applyMove(state, move), depth - 1, localAlpha, beta, cache);
+      if (score > best) best = score;
+      if (best > localAlpha) localAlpha = best;
+      if (localAlpha >= beta) break;
+    }
+  } else {
+    best = Number.POSITIVE_INFINITY;
+    let localBeta = beta;
+    for (const move of moves) {
+      const score = minimaxForDark(applyMove(state, move), depth - 1, alpha, localBeta, cache);
+      if (score < best) best = score;
+      if (best < localBeta) localBeta = best;
+      if (alpha >= localBeta) break;
+    }
+  }
+
+  cache.set(key, best);
+  return best;
+}
+
+function monteCarloWinRate(stateAfterMove: GameState, playouts: number, rng: () => number): number {
+  let darkWins = 0;
+  for (let i = 0; i < playouts; i += 1) {
+    const winner = simulateRandomPlayout(stateAfterMove, rng);
+    if (winner === 'dark') darkWins += 1;
+  }
+  return darkWins / playouts;
+}
+
+function compareHardScores(
+  a: { winRate: number; replies: number; edgeWaste: number; darkSides: number; move: Move },
+  b: { winRate: number; replies: number; edgeWaste: number; darkSides: number; move: Move },
+): number {
+  return (
+    b.winRate - a.winRate ||
+    a.replies - b.replies ||
+    a.edgeWaste - b.edgeWaste ||
+    a.darkSides - b.darkSides ||
+    compareMoves(a.move, b.move)
+  );
+}
+
 /** Pick a move for the single-player practice opponent. */
 export function pickPracticeMove(
   state: GameState,
@@ -184,28 +401,75 @@ export function pickPracticeMove(
   const options = legalMoves(state);
   if (options.length === 0) return null;
 
-  const scored = options.map((move) => ({
-    move,
-    replies: legalMoves(applyMove(state, move)).length,
+  if (difficulty === 'easy') {
+    const ranked = options
+      .map((move) => ({ move, replies: scoreOpponentReplies(state, move) }))
+      .sort((a, b) => a.replies - b.replies || compareMoves(a.move, b.move));
+    const keep = Math.max(1, Math.ceil(ranked.length / 2));
+    const pool = ranked.slice(ranked.length - keep);
+    return pool[randomIndex(pool.length, rng)].move;
+  }
+
+  if (difficulty === 'medium') {
+    const ranked = options
+      .map((move) => {
+        const stateAfter = applyMove(state, move);
+        return { move, score: evaluateMobilityForDark(stateAfter) };
+      })
+      .sort((a, b) => b.score - a.score || compareMoves(a.move, b.move));
+    const keep = Math.max(1, Math.ceil(ranked.length / 2));
+    const pool = ranked.slice(0, keep);
+    return pool[randomIndex(pool.length, rng)].move;
+  }
+
+  const depth = hardSearchDepth(state);
+  const cache = new Map<string, number>();
+  const rootCandidates = options
+    .map((move) => ({ move, quick: quickMoveScoreForDark(state, move) }))
+    .sort((a, b) => b.quick - a.quick || compareMoves(a.move, b.move));
+  const rootLimit = Math.max(8, Math.min(rootCandidates.length, 12));
+  const narrowed = rootCandidates.slice(0, rootLimit).map((item) => item.move);
+
+  const searchScored = narrowed.map((move) => {
+    const stateAfter = applyMove(state, move);
+    return {
+      move,
+      minimax: minimaxForDark(
+        stateAfter,
+        Math.max(0, depth - 1),
+        Number.NEGATIVE_INFINITY,
+        Number.POSITIVE_INFINITY,
+        cache,
+      ),
+      replies: legalMoves(stateAfter).length,
+      edgeWaste: countDarkEdgeWaste(move),
+      darkSides: countDarkSides(move.tileId),
+      stateAfter,
+    };
+  });
+
+  searchScored.sort(
+    (a, b) =>
+      b.minimax - a.minimax ||
+      a.replies - b.replies ||
+      a.edgeWaste - b.edgeWaste ||
+      a.darkSides - b.darkSides ||
+      compareMoves(a.move, b.move),
+  );
+
+  const bestMinimax = searchScored[0].minimax;
+  const finalists = searchScored.filter((item) => item.minimax >= bestMinimax - 3).slice(0, 4);
+  const playoutsPerFinalist = 16;
+  const hardScored = finalists.map((item) => ({
+    move: item.move,
+    replies: item.replies,
+    edgeWaste: item.edgeWaste,
+    darkSides: item.darkSides,
+    winRate: monteCarloWinRate(item.stateAfter, playoutsPerFinalist, rng),
   }));
 
-  if (difficulty === 'hard') {
-    return scored.reduce((best, current) => (current.replies < best.replies ? current : best)).move;
-  }
-
-  if (difficulty === 'easy') {
-    return scored.reduce((best, current) => (current.replies > best.replies ? current : best)).move;
-  }
-
-  const ranked = scored
-    .slice()
-    .sort((a, b) => a.replies - b.replies || a.move.tileId.localeCompare(b.move.tileId));
-  const middle = Math.floor(ranked.length / 2);
-  const windowSize = Math.max(1, Math.ceil(ranked.length / 3));
-  const start = Math.max(0, middle - Math.floor(windowSize / 2));
-  const end = Math.min(ranked.length, start + windowSize);
-  const pool = ranked.slice(start, end);
-  return pool[Math.floor(rng() * pool.length)].move;
+  hardScored.sort(compareHardScores);
+  return hardScored[0].move;
 }
 
 export function hasLegalMove(state: GameState): boolean {

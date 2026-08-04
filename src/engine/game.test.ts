@@ -176,52 +176,74 @@ describe('end of the game', () => {
 });
 
 describe('practice AI', () => {
-  it('hard always chooses the move that leaves the player with the fewest replies', () => {
-    const state = openGame(fresh(), 14, 16);
-    const move = pickPracticeMove(state, 'hard', () => 0);
-    expect(move).not.toBeNull();
-    if (!move) return;
-    const replies = legalMoves(applyMove(state, move)).length;
-    const best = legalMoves(state)
-      .map((candidate) => ({ candidate, replies: legalMoves(applyMove(state, candidate)).length }))
-      .reduce((bestSoFar, item) => (item.replies < bestSoFar.replies ? item : bestSoFar), {
-        candidate: legalMoves(state)[0],
-        replies: Number.POSITIVE_INFINITY,
-      });
-    expect(replies).toBe(best.replies);
-  });
+  function replyCountAfter(state: GameState, move: (typeof legalMoves extends (s: any) => infer R ? R[number] : never)) {
+    return legalMoves(applyMove(state, move)).length;
+  }
 
-  it('easy prefers the move that leaves the player with the most replies', () => {
+  function mobilityScoreForDark(state: GameState): number {
+    return legalMoves({ ...state, turn: 'dark' }).length - legalMoves({ ...state, turn: 'light' }).length;
+  }
+
+  it('easy chooses from the weak half that gives the opponent many replies', () => {
     const state = openGame(fresh(), 14, 16);
+    const ranked = legalMoves(state)
+      .map((candidate) => ({ candidate, replies: replyCountAfter(state, candidate) }))
+      .sort((a, b) => a.replies - b.replies || a.candidate.tileId.localeCompare(b.candidate.tileId));
+    const keep = Math.max(1, Math.ceil(ranked.length / 2));
+    const pool = ranked.slice(ranked.length - keep);
+    const weakestReplyCount = pool[0].replies;
+    const bestReplyCount = ranked[0].replies;
     const move = pickPracticeMove(state, 'easy', () => 0);
     expect(move).not.toBeNull();
     if (!move) return;
-    const replies = legalMoves(applyMove(state, move)).length;
-    const worst = legalMoves(state)
-      .map((candidate) => ({ candidate, replies: legalMoves(applyMove(state, candidate)).length }))
-      .reduce((worstSoFar, item) => (item.replies > worstSoFar.replies ? item : worstSoFar), {
-        candidate: legalMoves(state)[0],
-        replies: Number.NEGATIVE_INFINITY,
-      });
-    expect(replies).toBe(worst.replies);
+    const replies = replyCountAfter(state, move);
+    expect(pool.some((item) => item.candidate.index === move.index && item.candidate.tileId === move.tileId)).toBe(
+      true,
+    );
+    expect(replies).toBeGreaterThanOrEqual(weakestReplyCount);
+    expect(replies).toBeGreaterThanOrEqual(bestReplyCount);
   });
 
-  it('medium chooses a mid-ranked move instead of the obvious best or worst choice', () => {
+  it('medium chooses from top mobility-scoring moves for dark, with randomness in that pool', () => {
     const state = openGame(fresh(), 14, 16);
-    const scores = legalMoves(state)
-      .map((candidate) => ({ candidate, replies: legalMoves(applyMove(state, candidate)).length }))
-      .sort((a, b) => a.replies - b.replies || a.candidate.tileId.localeCompare(b.candidate.tileId));
-    const middle = Math.floor(scores.length / 2);
-    const windowSize = Math.max(1, Math.ceil(scores.length / 3));
-    const start = Math.max(0, middle - Math.floor(windowSize / 2));
-    const end = Math.min(scores.length, start + windowSize);
-    const pool = scores.slice(start, end);
+    const ranked = legalMoves(state)
+      .map((candidate) => ({ candidate, score: mobilityScoreForDark(applyMove(state, candidate)) }))
+      .sort((a, b) => b.score - a.score || a.candidate.tileId.localeCompare(b.candidate.tileId));
+    const keep = Math.max(1, Math.ceil(ranked.length / 2));
+    const pool = ranked.slice(0, keep);
     const move = pickPracticeMove(state, 'medium', () => 0.5);
     expect(move).not.toBeNull();
     if (!move) return;
-    const replies = legalMoves(applyMove(state, move)).length;
-    expect(pool.some((item) => item.replies === replies)).toBe(true);
+    const pickedScore = mobilityScoreForDark(applyMove(state, move));
+    expect(pool.some((item) => item.candidate.index === move.index && item.candidate.tileId === move.tileId)).toBe(
+      true,
+    );
+    expect(pickedScore).toBeGreaterThanOrEqual(ranked[ranked.length - 1].score);
   });
+
+  it(
+    'hard returns a legal move and is stable with deterministic playout randomness',
+    () => {
+      let state = openGame(fresh(), 14, 16);
+      // Move to a narrower mid/late-game branch so Monte Carlo remains quick in tests.
+      for (let i = 0; i < 14 && state.phase !== 'finished'; i += 1) {
+        const options = legalMoves(state);
+        if (options.length === 0) break;
+        state = applyMove(state, options[0]);
+      }
+    const first = pickPracticeMove(state, 'hard', () => 0);
+    const second = pickPracticeMove(state, 'hard', () => 0);
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    if (!first || !second) return;
+    const legal = legalMoves(state);
+    expect(legal.some((m) => m.index === first.index && m.tileId === first.tileId && m.rotation === first.rotation)).toBe(
+      true,
+    );
+      expect(second).toEqual(first);
+    },
+    15000,
+  );
 });
 
 describe('self play', () => {
