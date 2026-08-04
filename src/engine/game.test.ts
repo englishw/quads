@@ -176,7 +176,7 @@ describe('end of the game', () => {
 });
 
 describe('practice AI', () => {
-  function replyCountAfter(state: GameState, move: (typeof legalMoves extends (s: any) => infer R ? R[number] : never)) {
+  function replyCountAfter(state: GameState, move: ReturnType<typeof legalMoves>[number]) {
     return legalMoves(applyMove(state, move)).length;
   }
 
