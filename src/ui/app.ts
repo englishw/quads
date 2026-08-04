@@ -92,7 +92,7 @@ const PRACTICE_DIFFICULTY_NAMES: Record<PracticeDifficulty, string> = {
 const VIEW_STORAGE_KEY = 'quads.view';
 const QUICK_START_STORAGE_KEY = 'quads.quickstart.v1';
 const SAVE_STORAGE_KEY = 'quads.save.v1';
-const APP_VERSION = 'v0.19';
+const APP_VERSION = 'v0.20';
 
 const STATUS_LABELS: Record<RelayStatus, string> = {
   idle: 'Not connected',

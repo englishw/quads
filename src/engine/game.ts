@@ -1,5 +1,6 @@
 import {
   DIRECTIONS,
+  BOARD_SIZE,
   CELL_COUNT,
   type Owner,
   type PlacedTile,
@@ -255,6 +256,46 @@ function reserveSideBalance(state: GameState): number {
   return darkReserve - lightReserve;
 }
 
+function centralWeight(index: number): number {
+  const row = Math.floor(index / BOARD_SIZE);
+  const col = index % BOARD_SIZE;
+  if (row >= 2 && row <= 3 && col >= 2 && col <= 3) return 2;
+  if (row >= 1 && row <= 4 && col >= 1 && col <= 4) return 1;
+  return 0;
+}
+
+function boardPositionalForDark(state: GameState): {
+  edgeWasteDark: number;
+  edgeWasteLight: number;
+  centralDark: number;
+  centralLight: number;
+} {
+  let edgeWasteDark = 0;
+  let edgeWasteLight = 0;
+  let centralDark = 0;
+  let centralLight = 0;
+
+  for (let index = 0; index < state.board.length; index += 1) {
+    const cell = state.board[index];
+    if (!cell) continue;
+
+    const sides = tileById(cell.tileId).sides;
+    for (const dir of DIRECTIONS) {
+      if (neighbourIndex(index, dir) !== null) continue;
+      const side = sideAt(sides, cell.rotation, dir);
+      if (side === 'D') edgeWasteDark += 1;
+      if (side === 'L') edgeWasteLight += 1;
+    }
+
+    const weight = centralWeight(index);
+    if (weight === 0) continue;
+    if (cell.owner === 'dark') centralDark += weight;
+    if (cell.owner === 'light') centralLight += weight;
+  }
+
+  return { edgeWasteDark, edgeWasteLight, centralDark, centralLight };
+}
+
 function staticEvalForDark(state: GameState): number {
   if (state.phase === 'finished') {
     if (state.winner === 'dark') return 1_000_000;
@@ -263,7 +304,9 @@ function staticEvalForDark(state: GameState): number {
   }
   const mobility = evaluateMobilityForDark(state);
   const reserve = reserveSideBalance(state);
-  return mobility * 14 + reserve * 2;
+  const { edgeWasteDark, edgeWasteLight, centralDark, centralLight } = boardPositionalForDark(state);
+  const positional = -edgeWasteDark * 3 + edgeWasteLight * 2 + centralDark * 2 - centralLight * 2;
+  return mobility * 18 + reserve * 2 + positional;
 }
 
 function quickMoveScoreForDark(state: GameState, move: Move): number {
@@ -276,9 +319,9 @@ function quickMoveScoreForDark(state: GameState, move: Move): number {
 
 function searchOrderScore(state: GameState, move: Move): number {
   if (state.turn === 'dark') {
-    return -countDarkEdgeWaste(move) * 8 - countDarkSides(move.tileId);
+    return -countDarkEdgeWaste(move) * 16 + countDarkSides(move.tileId) * 6;
   }
-  return -countLightEdgeWaste(move) * 8 - countLightSides(move.tileId);
+  return -countLightEdgeWaste(move) * 10 - countLightSides(move.tileId) * 3;
 }
 
 function stateKey(state: GameState, depth: number): string {
@@ -298,18 +341,16 @@ function stateKey(state: GameState, depth: number): string {
 
 function hardSearchDepth(state: GameState): number {
   const empties = CELL_COUNT - placedCount(state);
-  if (empties <= 8) return 5;
-  if (empties <= 14) return 4;
-  if (empties <= 22) return 3;
+  if (empties <= 6) return 4;
+  if (empties <= 14) return 3;
   return 2;
 }
 
 function hardBranchLimit(state: GameState): number {
   const empties = CELL_COUNT - placedCount(state);
-  if (empties <= 10) return 20;
-  if (empties <= 16) return 16;
-  if (empties <= 24) return 12;
-  return 10;
+  if (empties <= 10) return 14;
+  if (empties <= 18) return 10;
+  return 8;
 }
 
 function orderedMovesForSearch(state: GameState): Move[] {
@@ -427,7 +468,7 @@ export function pickPracticeMove(
   const rootCandidates = options
     .map((move) => ({ move, quick: quickMoveScoreForDark(state, move) }))
     .sort((a, b) => b.quick - a.quick || compareMoves(a.move, b.move));
-  const rootLimit = Math.max(8, Math.min(rootCandidates.length, 12));
+  const rootLimit = Math.min(rootCandidates.length, 8);
   const narrowed = rootCandidates.slice(0, rootLimit).map((item) => item.move);
 
   const searchScored = narrowed.map((move) => {
@@ -457,9 +498,15 @@ export function pickPracticeMove(
       compareMoves(a.move, b.move),
   );
 
+  const empties = CELL_COUNT - placedCount(state);
+  const useMonteCarlo = empties <= 8;
+  if (!useMonteCarlo) {
+    return searchScored[0].move;
+  }
+
   const bestMinimax = searchScored[0].minimax;
-  const finalists = searchScored.filter((item) => item.minimax >= bestMinimax - 3).slice(0, 4);
-  const playoutsPerFinalist = 16;
+  const finalists = searchScored.filter((item) => item.minimax >= bestMinimax - 3).slice(0, 2);
+  const playoutsPerFinalist = 6;
   const hardScored = finalists.map((item) => ({
     move: item.move,
     replies: item.replies,

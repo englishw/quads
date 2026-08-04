@@ -38,6 +38,16 @@ function openGame(state: GameState, firstIndex: number, secondIndex: number): Ga
   });
 }
 
+function advanceToAtMostEmpties(state: GameState, maxEmpties: number): GameState {
+  let current = state;
+  while (current.phase !== 'finished' && 36 - placedCount(current) > maxEmpties) {
+    const options = legalMoves(current);
+    if (options.length === 0) break;
+    current = applyMove(current, options[0]);
+  }
+  return current;
+}
+
 describe('setup', () => {
   it('starts in the opening phase with light to move and full trays', () => {
     const state = fresh();
@@ -231,19 +241,56 @@ describe('practice AI', () => {
         if (options.length === 0) break;
         state = applyMove(state, options[0]);
       }
-    const first = pickPracticeMove(state, 'hard', () => 0);
-    const second = pickPracticeMove(state, 'hard', () => 0);
-    expect(first).not.toBeNull();
-    expect(second).not.toBeNull();
-    if (!first || !second) return;
-    const legal = legalMoves(state);
-    expect(legal.some((m) => m.index === first.index && m.tileId === first.tileId && m.rotation === first.rotation)).toBe(
-      true,
-    );
+      const first = pickPracticeMove(state, 'hard', () => 0);
+      const second = pickPracticeMove(state, 'hard', () => 0);
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      if (!first || !second) return;
+      const legal = legalMoves(state);
+      expect(
+        legal.some((m) => m.index === first.index && m.tileId === first.tileId && m.rotation === first.rotation),
+      ).toBe(true);
       expect(second).toEqual(first);
     },
     15000,
   );
+
+  it('hard skips Monte Carlo before late game and only uses it in late game', () => {
+    const base = openGame(fresh(), 14, 16);
+    const midgame = advanceToAtMostEmpties(base, 12);
+    const lateGame = advanceToAtMostEmpties(base, 8);
+
+    let midCalls = 0;
+    const midMove = pickPracticeMove(midgame, 'hard', () => {
+      midCalls += 1;
+      return 0.123;
+    });
+    expect(midMove).not.toBeNull();
+    // Hard mode should be deterministic from minimax only before the late-game threshold.
+    expect(midCalls).toBe(0);
+
+    let lateCalls = 0;
+    const lateMove = pickPracticeMove(lateGame, 'hard', () => {
+      lateCalls += 1;
+      return 0.456;
+    });
+    expect(lateMove).not.toBeNull();
+    expect(lateCalls).toBeGreaterThan(0);
+  });
+
+  it('hard late-game Monte Carlo budget is constrained', () => {
+    const base = openGame(fresh(), 14, 16);
+    const lateGame = advanceToAtMostEmpties(base, 8);
+
+    let calls = 0;
+    const move = pickPracticeMove(lateGame, 'hard', () => {
+      calls += 1;
+      return 0.789;
+    });
+    expect(move).not.toBeNull();
+    // With <=8 empties, 2 finalists and 6 playouts each keep stochastic work bounded.
+    expect(calls).toBeLessThan(120);
+  });
 });
 
 describe('self play', () => {
