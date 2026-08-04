@@ -887,6 +887,7 @@ export function mountGame(
           <input type="checkbox" data-action="edge" ${s.options.requireBoardEdgeMatch ? 'checked' : ''}/>
           Board edge: border-facing sides must match the board edge style
         </label>
+        <p class="dialog__version" aria-label="App version">Version ${APP_VERSION}</p>
         <button type="button" class="btn" data-action="rules">Close</button>
       </div>`;
   }
@@ -1036,8 +1037,7 @@ export function mountGame(
           ${resultMarkup()}
         </div>
         ${panelMarkup(near)}
-      </div>
-      <div class="build-version" aria-hidden="true">${APP_VERSION}</div>`;
+      </div>`;
   }
 
   // --- interaction ---------------------------------------------------------
